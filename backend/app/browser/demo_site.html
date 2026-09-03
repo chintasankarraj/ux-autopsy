@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PixelMart — Demo Electronics Store</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; margin: 0; background: #f7f7f8; color: #1a1a1a; }
+  header { background: #10151f; color: #fff; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+  header .brand { font-weight: 700; font-size: 18px; }
+  header .cart { font-size: 13px; color: #cfd6e4; }
+  .toolbar { display: flex; gap: 10px; padding: 14px 24px; background: #fff; border-bottom: 1px solid #e5e5e5; align-items: center; flex-wrap: wrap; }
+  .toolbar input { flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; }
+  .toolbar select { padding: 7px 12px; border: 1px solid #ccc; background: #fafafa; border-radius: 6px; font-size: 13px; }
+  #filter-panel { display: none; padding: 12px 24px; background: #eef1f6; border-bottom: 1px solid #dde; }
+  #filter-panel.open { display: block; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; padding: 20px 24px; }
+  .card { background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; padding: 12px; }
+  .card h3 { font-size: 14px; margin: 8px 0 4px; }
+  .card .price { color: #444; font-size: 13px; margin-bottom: 8px; font-weight: 600; }
+  .card button { width: 100%; padding: 8px; background: #10151f; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .card button:disabled { background: #94a3b8; cursor: default; }
+  .card .swatch { height: 90px; background: #d9dce3; border-radius: 6px; }
+  #checkout-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); align-items: center; justify-content: center; }
+  #checkout-modal.open { display: flex; }
+  .modal-box { background: #fff; padding: 20px; border-radius: 8px; width: 320px; }
+  .modal-box input { width: 100%; padding: 8px; margin: 6px 0; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+  .modal-box button { width: 100%; padding: 9px; background: #10151f; color: #fff; border: none; border-radius: 6px; margin-top: 8px; cursor: pointer; }
+  #confirm { display: none; padding: 40px; text-align: center; }
+  #confirm.open { display: block; }
+  .hint { font-size: 12px; color: #888; padding: 0 24px 12px; }
+  .empty { padding: 40px 24px; text-align: center; color: #888; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">PixelMart</div>
+  <div class="cart">Cart: <span id="cart-badge">0</span></div>
+</header>
+
+<div class="toolbar">
+  <input id="search-input" placeholder="Search products..." />
+  <select id="sort-select">
+    <option>Sort: Featured</option>
+    <option>Sort: Price Low-High</option>
+    <option>Sort: Price High-Low</option>
+  </select>
+  <a href="#" id="filter-toggle" style="font-size:12px;color:#999;text-decoration:underline;">filter options</a>
+</div>
+
+<div id="filter-panel">
+  <label style="font-size:13px;">Category:</label>
+  <select id="category-select">
+    <option value="all">All</option>
+    <option value="laptop">Laptops</option>
+    <option value="phone">Phones</option>
+    <option value="audio">Audio</option>
+  </select>
+</div>
+
+<p class="hint">Try: find a laptop under ₹60,000 and add it to the cart.</p>
+
+<div class="grid" id="product-grid"></div>
+
+<div id="checkout-modal">
+  <div class="modal-box">
+    <h3>Checkout</h3>
+    <input id="email-input" placeholder="Email (optional)" />
+    <button id="buy-btn">Buy</button>
+  </div>
+</div>
+
+<div id="confirm">
+  <h2>Order confirmed</h2>
+  <p>Thanks for your purchase — a receipt has been emailed to you.</p>
+</div>
+
+<script>
+  // Laptop listed first so the deterministic demo heuristic (which does keyword
+  // matching, not price reasoning) reliably lands on the in-budget item.
+  const products = [
+    { id: "laptop-aero", name: "AeroBook 14 Laptop", price: 54999, cat: "laptop" },
+    { id: "laptop-titan", name: "TitanBook Pro Laptop", price: 78499, cat: "laptop" },
+    { id: "phone-nova", name: "NovaPhone X", price: 34999, cat: "phone" },
+    { id: "audio-sonic", name: "SonicWave Headphones", price: 2499, cat: "audio" },
+  ];
+
+  const grid = document.getElementById("product-grid");
+  const fmt = (n) => "₹" + n.toLocaleString("en-IN");
+
+  function render(list) {
+    grid.innerHTML = "";
+    if (list.length === 0) {
+      grid.innerHTML = '<div class="empty">No products match your search.</div>';
+      return;
+    }
+    list.forEach((p) => {
+      const el = document.createElement("div");
+      el.className = "card";
+      el.innerHTML = `<div class="swatch"></div><h3>${p.name}</h3><div class="price">${fmt(p.price)}</div>
+        <button data-id="${p.id}" class="buy-now">Buy Now</button>`;
+      grid.appendChild(el);
+    });
+  }
+  render(products);
+
+  let cartCount = 0;
+  function applyFilters() {
+    const q = document.getElementById("search-input").value.trim().toLowerCase();
+    const cat = document.getElementById("category-select").value;
+    let list = products;
+    if (q) list = list.filter((p) => p.name.toLowerCase().includes(q));
+    if (cat !== "all") list = list.filter((p) => p.cat === cat);
+    render(list);
+  }
+  document.getElementById("search-input").addEventListener("input", applyFilters);
+  document.getElementById("category-select").addEventListener("change", applyFilters);
+
+  document.body.addEventListener("click", (e) => {
+    if (e.target.classList.contains("buy-now")) {
+      cartCount++;
+      document.getElementById("cart-badge").textContent = cartCount;
+      e.target.textContent = "Added";
+      // Disable every Buy Now button (not just this one) so none of them sit
+      // beneath the checkout overlay still enabled-but-unreachable.
+      document.querySelectorAll(".buy-now").forEach((b) => { b.disabled = true; });
+      document.getElementById("checkout-modal").classList.add("open");
+    }
+  });
+
+  document.getElementById("filter-toggle").addEventListener("click", (e) => {
+    e.preventDefault();
+    document.getElementById("filter-panel").classList.toggle("open");
+  });
+
+  document.getElementById("buy-btn").addEventListener("click", () => {
+    document.getElementById("checkout-modal").classList.remove("open");
+    document.getElementById("confirm").classList.add("open");
+  });
+</script>
+</body>
+</html>
