@@ -125,12 +125,84 @@ tests → manual browser verification.
 
 ## Environment notes
 
-- **Git**: the repository at `C:\Users\srava` (the user's home directory)
-  has its own `.git`, unrelated to this project — `ux-autopsy` is *not*
-  itself a git repository. No git operations were performed against that
-  home-directory repo. If you want version control for this project, run
-  `git init` inside `ux-autopsy/` specifically (see chat for details) —
-  deliberately left for you to confirm rather than done automatically.
+- **Git**: `ux-autopsy/` has its own repo (`git init` run 2026-09-04, initial
+  commit `53526e2`), separate from the unrelated repo at the user's home
+  directory `C:\Users\srava`. No git operations have ever touched that
+  home-directory repo.
 - Backend must be run from the **project root** (not `backend/`) via
   `python -m uvicorn backend.app.main:app`, since the code imports itself as
   `backend.app.*`.
+
+## Diagnostic cleanup (2026-09-04)
+
+VS Code was reporting 7 Problems (red/yellow underlines) despite the app
+running correctly. Root cause of the disconnect: **no `.vscode/settings.json`
+existed**, so Pylance was analyzing the backend against system Python 3.14
+(`C:\Python314\python.exe`) instead of the project's `backend/.venv` — a
+different interpreter with a different (and incomplete) set of packages
+installed. The app worked at runtime because every terminal command in this
+project explicitly used the venv's python; the *editor* had no way to know
+that venv existed.
+
+Fixed by adding `.vscode/settings.json` (`python.defaultInterpreterPath`
+pointing at `backend/.venv`, plus `python.analysis.extraPaths` so the
+`backend.app.*` self-import style resolves) and `pyrightconfig.json` at the
+repo root, configured the same way. Installed `pyright` (the engine behind
+Pylance) into the venv to get an authoritative, reproducible diagnostic
+count instead of guessing from IDE state — went from **12 real errors** down
+to **0 errors, 0 warnings, 0 informations**, plus a few more small issues
+that surfaced incidentally while fixing those:
+
+1. **`api/routes.py` — 5 `reportOptional*` errors.** `_session()` fetches a
+   row, checks it's not `None`, then calls `row_to_dict(row)` — but
+   `row_to_dict`'s signature is `dict | None`, so pyright couldn't see that
+   *this specific call* can never actually return `None`. Every downstream
+   dict access (`d["score_breakdown"]`, and later `s["status"]` /
+   `s["progress"]` in `get_session()`) inherited the `| None` uncertainty.
+   Fixed with an explicit `assert d is not None` right after the call — this
+   makes a real invariant explicit (and would fail loudly if it were ever
+   violated) rather than suppressing the check.
+2. **`services/session_service.py` — 5 more of the same**, in
+   `dashboard_stats()`. `SELECT COUNT/AVG/SUM ... FROM sessions` with no
+   `GROUP BY` always returns exactly one row (even 0/NULL on an empty
+   table), so `.fetchone()` can't return `None` here either. Same
+   `assert ... is not None` fix, one per aggregate query.
+3. **`providers/gemini.py` — `reportPrivateImportUsage` ×2.** The
+   `google-generativeai` package's `__init__.py` re-exports `configure` and
+   `GenerativeModel` without an explicit `__all__`, so pyright treats them as
+   private even though they're the library's documented public API (verified
+   they exist and work at runtime). Fixed by importing directly from the
+   submodules where they're actually defined
+   (`google.generativeai.client.configure`,
+   `google.generativeai.generative_models.GenerativeModel`) — resolves the
+   check without disabling it. Also fixed a real (if minor) bug found while
+   in this file: `GenerativeModel("gemini-1.5-flash")` was hardcoded instead
+   of reading `settings.gemini_model` (the `GEMINI_MODEL` env var was being
+   silently ignored).
+4. **`providers/gemini.py` — unused loop variable.** `for attempt in
+   range(2):` never used `attempt`. Renamed to `for _ in range(2):` — the
+   standard idiom, not a suppression.
+5. **`api/routes.py` — unused route parameter.** The catch-all demo-site
+   route used `_p` as both the path-template name and function parameter,
+   which Pylance still flagged as unused despite the leading underscore.
+   Renamed to the bare `_` (in both the decorator's `{_}` and the function
+   signature), which is the convention actually recognized as
+   intentionally-unused.
+6. **`main.py` — deprecated `@app.on_event("startup")`.** Not an IDE
+   diagnostic but a real `DeprecationWarning` surfaced by pytest on every
+   run (FastAPI is dropping this API). Migrated to the modern `lifespan`
+   context-manager pattern; behavior is identical (calls `init_db()` before
+   serving).
+
+**Left as-is, and why:** the `lifespan` callback's `_app: FastAPI` parameter
+still shows a faded "not accessed" *hint* in the editor. This is required by
+FastAPI/Starlette's lifespan protocol (the function signature must accept
+it) and is already prefixed with `_` per convention — pyright's authoritative
+CLI run reports 0 warnings for it, confirming it's an editor-only cosmetic
+hint (a dotted underline, not a red/yellow Problem), not a real diagnostic.
+
+Re-verified after all fixes: pyright 0/0/0, 16/16 backend tests pass
+(`pytest tests/ -v`, live server up), frontend `tsc -b --force` clean, 2/2
+Playwright E2E tests pass, and a manual health/proxy check confirmed the
+frontend dev server correctly proxies `/api/*` to the backend
+(`curl localhost:5173/api/health` → `200`).

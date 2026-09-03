@@ -41,20 +41,33 @@ def retest(sid):
 
 
 def dashboard_stats():
+    # A bare COUNT/AVG/SUM with no GROUP BY always returns exactly one row
+    # (0/NULL on an empty table, never zero rows), so these fetchone() calls
+    # can't actually return None — asserted below so that invariant is
+    # explicit rather than left for a type checker to guess at.
     db = get_db()
-    total = db.execute("SELECT COUNT(*) c FROM sessions").fetchone()["c"]
-    successful = db.execute(
+
+    total_row = db.execute("SELECT COUNT(*) c FROM sessions").fetchone()
+    assert total_row is not None
+
+    successful_row = db.execute(
         "SELECT COUNT(*) c FROM sessions WHERE status='completed' AND completed=1"
-    ).fetchone()["c"]
+    ).fetchone()
+    assert successful_row is not None
+
     avg_row = db.execute(
         "SELECT AVG(ux_score) a FROM sessions WHERE status='completed' AND ux_score IS NOT NULL"
     ).fetchone()
+    assert avg_row is not None
+
     friction_row = db.execute(
         "SELECT SUM(friction_count) f FROM sessions WHERE friction_count IS NOT NULL"
     ).fetchone()
+    assert friction_row is not None
+
     return {
-        "total_sessions": total,
-        "successful_sessions": successful,
+        "total_sessions": total_row["c"],
+        "successful_sessions": successful_row["c"],
         "avg_ux_score": round(avg_row["a"], 1) if avg_row["a"] is not None else None,
         "total_friction": friction_row["f"] or 0,
     }

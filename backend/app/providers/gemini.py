@@ -30,14 +30,20 @@ class GeminiProvider(LLMProvider):
     name = "gemini"
 
     def __init__(self):
-        import google.generativeai as genai
-        genai.configure(api_key=settings.gemini_api_key)
-        self.model = genai.GenerativeModel("gemini-1.5-flash")
+        # Imported from the defining submodules rather than the `google.generativeai`
+        # package root: the package re-exports these without an explicit `__all__`,
+        # which trips static "private import" checks even though this is the
+        # library's documented public API.
+        from google.generativeai.client import configure
+        from google.generativeai.generative_models import GenerativeModel
+
+        configure(api_key=settings.gemini_api_key)
+        self.model = GenerativeModel(settings.gemini_model)
 
     def decide(self, obs, task, persona, history, element_map):
         prompt = DECIDE_PROMPT.format(task=task, persona=persona,
             obs=json.dumps(obs)[:6000], hist=json.dumps(history[-8:]))
-        for attempt in range(2):
+        for _ in range(2):
             try:
                 data = _parse(self.model.generate_content(prompt).text)
                 if data.get("action") in ("click", "type") and data.get("target") not in element_map:

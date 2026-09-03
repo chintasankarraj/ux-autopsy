@@ -13,11 +13,12 @@ router = APIRouter(prefix="/api")
 def _url_ok(url):
     return bool(re.match(r"^https?://[^\s/.?#].[^\s]*", url))
 
-def _session(sid):
+def _session(sid) -> dict:
     row = get_db().execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
     if row is None:
         raise HTTPException(404, "Session not found")
     d = row_to_dict(row)
+    assert d is not None  # row_to_dict only returns None when row is None, ruled out above
     if d.get("score_breakdown"):
         d["score_breakdown"] = json.loads(d["score_breakdown"])
     return d
@@ -88,8 +89,8 @@ def stats():
     return session_service.dashboard_stats()
 
 @router.get("/demo-site/", response_class=HTMLResponse)
-@router.get("/demo-site/{_p}", response_class=HTMLResponse)
-def demo_site(_p=""):
+@router.get("/demo-site/{_}", response_class=HTMLResponse)
+def demo_site(_=""):
     return (Path(__file__).resolve().parents[1] / "browser" / "demo_site.html").read_text(encoding="utf-8")
 
 @router.get("/screenshots/{name}")
