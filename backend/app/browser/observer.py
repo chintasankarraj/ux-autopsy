@@ -16,17 +16,27 @@ SELECTORS = {
     "link": "a[href]",
 }
 
+# count() takes a DOM snapshot, but nth(i) re-resolves lazily against the
+# live DOM on every later call. If the page mutates between count() and a
+# per-element probe (e.g. right after a navigation), Playwright's unset
+# default (30000ms) makes that single stale probe block the entire agent
+# loop for 30s waiting for an element that will never reappear at that
+# index. These probes only ever run against elements already enumerated as
+# present, so a short timeout is correctness-safe: a real element resolves
+# in milliseconds, and a stale one should fail fast, not stall.
+OBSERVE_PROBE_TIMEOUT_MS = 1500
+
 
 def _text_for(el) -> str:
     try:
-        txt = (el.inner_text() or "").strip()
+        txt = (el.inner_text(timeout=OBSERVE_PROBE_TIMEOUT_MS) or "").strip()
     except Exception:
         txt = ""
     if txt:
         return txt[:80]
     for attr in ("placeholder", "aria-label", "value", "title"):
         try:
-            v = el.get_attribute(attr)
+            v = el.get_attribute(attr, timeout=OBSERVE_PROBE_TIMEOUT_MS)
         except Exception:
             v = None
         if v and v.strip():
@@ -52,9 +62,9 @@ def observe(page) -> dict:
         for i in range(count):
             el = loc.nth(i)
             try:
-                if el.is_disabled():
+                if el.is_disabled(timeout=OBSERVE_PROBE_TIMEOUT_MS):
                     continue
-                box = el.bounding_box()
+                box = el.bounding_box(timeout=OBSERVE_PROBE_TIMEOUT_MS)
             except Exception:
                 box = None
             if not box or box["width"] <= 0 or box["height"] <= 0:
@@ -63,7 +73,7 @@ def observe(page) -> dict:
             elements.append({"id": f"{kind}_{idx:02d}", "kind": kind, "text": _text_for(el)})
 
     try:
-        body_text = page.locator("body").inner_text()
+        body_text = page.locator("body").inner_text(timeout=OBSERVE_PROBE_TIMEOUT_MS)
     except Exception:
         body_text = ""
 

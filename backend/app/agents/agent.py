@@ -1,7 +1,7 @@
 import os, time
 from playwright.sync_api import sync_playwright, ViewportSize
 from backend.app.config import settings
-from backend.app.browser.observer import observe, SELECTORS
+from backend.app.browser.observer import observe, SELECTORS, OBSERVE_PROBE_TIMEOUT_MS
 from backend.app.browser.executor import execute
 from backend.app.providers.base import get_provider
 from backend.app.agents.completion import completion_evidence, evaluate_completion
@@ -16,9 +16,9 @@ def build_map(page):
         for i in range(loc.count()):
             el = loc.nth(i)
             try:
-                if el.is_disabled():
+                if el.is_disabled(timeout=OBSERVE_PROBE_TIMEOUT_MS):
                     continue
-                box = el.bounding_box()
+                box = el.bounding_box(timeout=OBSERVE_PROBE_TIMEOUT_MS)
             except Exception:
                 box = None
             if box and box["width"] > 0 and box["height"] > 0:
