@@ -5,11 +5,97 @@ Last updated: 2026-09-04
 ## Summary
 
 UX Autopsy is now a working, end-to-end product with a genuinely
-evidence-driven demo (v1.1) and, as of v1.2, more reliable real-world Gemini
-execution and more trustworthy evidence — see "v1.2: reliable real-world
-agent execution" below. Every item on the Phase 20 acceptance checklist (see
-below) passes locally. This document records what was inherited, what was
-broken, what was fixed, and what remains a known limitation.
+evidence-driven demo (v1.1), more reliable real-world Gemini execution and
+trustworthy evidence (v1.2), and, as of v1.3, automated tests fully isolated
+from the real Gemini API so routine development can never burn live quota —
+see "v1.3: test isolation from live Gemini" below. Every item on the
+Phase 20 acceptance checklist (see below) passes locally. This document
+records what was inherited, what was broken, what was fixed, and what
+remains a known limitation.
+
+## v1.3: test isolation from live Gemini (2026-09-04)
+
+**Problem:** the v1.2 regression attempt showed that `pytest`/
+`playwright test` could silently consume real Gemini quota whenever the
+developer's `.env` had `LLM_PROVIDER=gemini` — because provider resolution
+(`settings.resolved_provider`) reads that same `.env` no matter who's
+asking. `test_api.py` drives a real end-to-end session, and
+`app.spec.ts`'s E2E test drives whatever backend happens to be running —
+both inherited the ambient environment's provider choice. This is exactly
+what exhausted the day's 20-request free-tier quota before the v1.2 live
+regression could run.
+
+**Changes (test/config only — no agent behavior, prompting, completion
+logic, friction logic, parsing, provenance, scoring, or UI touched):**
+
+- **`backend/tests/conftest.py`** (new) — forces `LLM_PROVIDER=mock` as a
+  plain environment variable for the whole `pytest` process, at import time
+  (before any test module can import `config.py`). This uses an
+  already-existing, documented override (`LLM_PROVIDER=mock`); no
+  application code changed. As defense in depth, the same file
+  monkeypatches the real Gemini SDK's `GenerativeModel.generate_content` at
+  the class level to raise a `RuntimeError` if anything ever calls it for
+  real during a test run, rather than silently reaching the live API. Tests
+  that inject their own `MagicMock` in place of `provider.model` (e.g.
+  `test_provenance.py`) are unaffected — they never touch the real class.
+- **`backend/tests/test_provider_isolation.py`** (new) — asserts
+  `LLM_PROVIDER` is forced to `mock`, `settings.resolved_provider` is
+  `"mock"` during tests, `get_provider()` returns a `MockProvider`, and a
+  direct call to the real SDK's `generate_content` raises the guard's
+  `RuntimeError`.
+- **`frontend/playwright.config.ts`** — added a `webServer` array so
+  Playwright starts both the backend and frontend itself for every run
+  (`reuseExistingServer: false`, deliberately — not just for CI — so a
+  leftover manually-started server, possibly configured for real Gemini,
+  is never silently reused) and passes `LLM_PROVIDER: "mock"` in the
+  backend process's environment. `__dirname` isn't available in this
+  project's ESM config files (`"type": "module"` in `package.json`), so it's
+  derived via `fileURLToPath(import.meta.url)`.
+- **`backend/scripts/live_gemini_regression.py`** (new) — the one
+  intentional path to a real Gemini call, kept structurally outside pytest
+  (`pytest.ini`'s `testpaths = tests` never collects `backend/scripts/`).
+  Refuses to run without `UX_AUTOPSY_ALLOW_LIVE_GEMINI=1`, and refuses if
+  the backend it's pointed at doesn't report `provider: gemini`. Talks to an
+  already-running backend over HTTP and prints a full report (session,
+  event/parser-failure counts, provider provenance, friction count,
+  screenshot location) — never touches or prints `GEMINI_API_KEY` itself.
+- **README.md** — documented the isolation mechanism, corrected an initial
+  overstatement (a real `uvicorn` process is still needed for
+  `test_api.py`'s Playwright browser to load the built-in demo site page —
+  a plain local HTTP fetch, unrelated to Gemini; the session's *decisions*
+  still always resolve to mock because `run_agent()` executes inside the
+  `pytest` process itself, not by delegating to that separate server), and
+  added the live-regression command.
+
+**`.env`/`.env.example`: unchanged.** No change was required — isolation is
+achieved entirely by overriding the `LLM_PROVIDER` environment variable at
+the test-runner level (already a first-class, documented override), never
+by touching the developer's own configuration file.
+
+**Verified (2026-09-04, no live Gemini calls made during this work):**
+- `pytest backend/tests/ -v` — **54/54 passed in ~4.5s** (down from 150s+
+  when real Gemini was in the loop) — with a real `uvicorn` process running
+  and its own `.env` still set to `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`
+  present.
+- `pyright` — 0/0/0. `npx tsc -b --force` — clean.
+- `npx playwright test` — **2/2 passed in ~10s** (down from ~50s), with
+  Playwright printing `Uvicorn running on http://0.0.0.0:8000` from its own
+  spawned process and tearing both servers down afterward — confirmed no
+  server was listening on `:8000`/`:5173` before or after the run.
+- Direct confirmation: manually launching the exact spawned command with
+  `LLM_PROVIDER=mock` set reports `{"status":"ok","provider":"mock",
+  "demo_mode":true}` from `/api/health`, while the on-disk `.env` still says
+  `LLM_PROVIDER=gemini` — proving the override, not the file, is what's in
+  effect for tests.
+- No Gemini API request was made at any point during this v1.3 work
+  (confirmed by inspection — no code path in any test or script reaches
+  `generate_content` unless a developer explicitly runs
+  `live_gemini_regression.py` with its opt-in variable set).
+
+**The v1.2 live regression is still unvalidated** — this work only fixes
+test isolation; it does not itself run or re-attempt the live regression
+(intentionally, per instruction not to consume quota during this task). Use
+`backend/scripts/live_gemini_regression.py` once quota is available.
 
 ## v1.2: reliable real-world agent execution (2026-09-04)
 

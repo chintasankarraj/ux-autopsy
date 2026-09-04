@@ -288,9 +288,15 @@ Open http://localhost:5173, click **View Demo** on the dashboard, then
 
 ## Testing
 
+The normal test suites below **never contact the real Gemini API**, even on
+a machine whose `.env` has `LLM_PROVIDER=gemini` and a real
+`GEMINI_API_KEY` configured. See "Test isolation from Gemini" below for how.
+
 ```bash
 # Backend — unit + API tests (the API test drives a real Playwright session
-# against the live demo site, so start uvicorn first, as above)
+# against the built-in demo site, so start uvicorn first, as above — but the
+# session's own decisions always use the deterministic mock provider,
+# regardless of how that uvicorn process itself is configured; see below)
 cd backend
 pytest -v
 
@@ -301,11 +307,61 @@ pyright
 cd frontend
 npx tsc -b
 
-# Frontend E2E (requires both servers running)
+# Frontend E2E — Playwright manages its own backend + frontend servers for
+# this run (forcing the mock provider on the backend it spawns), so do not
+# pre-start either server yourself before running this.
 cd frontend
 npx playwright install chromium
 npx playwright test
 ```
+
+### Test isolation from Gemini
+
+`backend/tests/conftest.py` forces `LLM_PROVIDER=mock` for every `pytest`
+process, regardless of `.env` — no application code was changed to achieve
+this, since `LLM_PROVIDER=mock` was already a supported, documented
+override; it's just now applied consistently for test runs. As defense in
+depth, the same file also monkeypatches the real Gemini SDK's
+`generate_content` to raise loudly if anything ever calls it for real during
+a test run, rather than silently reaching the live API
+(`backend/tests/test_provider_isolation.py` asserts both of these hold).
+
+`test_api.py`'s session still needs a real `uvicorn` process listening on
+`:8000` for its Playwright browser to load the built-in demo site page —
+that's a plain HTTP page fetch, unrelated to Gemini. The session's actual
+*decisions*, though, are made by calling `run_agent()` directly inside the
+`pytest` process itself (`session_service.create_session()` spawns a
+background thread in that same process, it does not delegate to the
+separately-running `uvicorn` process) — so provider resolution always uses
+`pytest`'s own environment, which `conftest.py` has forced to `mock`,
+**regardless of how that standalone `uvicorn` process was configured**.
+
+The Playwright E2E suite drives the app through the real browser, so
+isolating it means controlling how its backend is started: `webServer` in
+`frontend/playwright.config.ts` has Playwright spawn the backend itself with
+`LLM_PROVIDER=mock` forced in that process's environment (and
+`reuseExistingServer: false`, so a leftover manually-started server —
+possibly configured for real Gemini — is never silently reused).
+
+### Live Gemini regression (manual, consumes real quota)
+
+There is exactly one intentional path to a real Gemini API call in this
+repo's tooling: `backend/scripts/live_gemini_regression.py`. It is a plain
+script, not a pytest test — `pytest`/`playwright test` never run it.
+
+```bash
+# 1. Configure .env for real Gemini (LLM_PROVIDER=gemini/auto + GEMINI_API_KEY)
+#    and start the backend normally:
+python -m uvicorn backend.app.main:app --port 8000
+
+# 2. Explicitly opt in and run the script (from the project root):
+UX_AUTOPSY_ALLOW_LIVE_GEMINI=1 backend/.venv/Scripts/python.exe \
+    backend/scripts/live_gemini_regression.py
+```
+
+It refuses to run without `UX_AUTOPSY_ALLOW_LIVE_GEMINI=1`, and refuses if
+the backend it finds isn't actually resolving to the `gemini` provider. Run
+it deliberately and sparingly — the free tier has a low daily request quota.
 
 ## Limitations
 
