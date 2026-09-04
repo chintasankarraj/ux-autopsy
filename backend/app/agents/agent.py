@@ -4,9 +4,37 @@ from backend.app.config import settings
 from backend.app.browser.observer import observe, SELECTORS, OBSERVE_PROBE_TIMEOUT_MS
 from backend.app.browser.executor import execute
 from backend.app.providers.base import get_provider
-from backend.app.agents.completion import completion_evidence, evaluate_completion
+from backend.app.agents.completion import (
+    completion_evidence,
+    dialog_completion_evidence,
+    evaluate_completion,
+)
 
 ALLOWED_ACTIONS = {"click", "type", "scroll", "navigate_back", "wait", "finish", "fail"}
+
+
+def capture_dialogs(page) -> list[dict]:
+    """Register a generic Playwright dialog listener (alert/confirm/prompt/
+    beforeunload -- a browser primitive, not a site-specific one) and return
+    the list it appends {"type", "message"} dicts to as dialogs occur.
+
+    Left unhandled, Playwright already auto-dismisses any dialog silently --
+    this preserves that exact dismiss behavior, it just also records what
+    the dialog said, so completion evidence has something to work with
+    instead of the content being discarded.
+    """
+    dialogs: list[dict] = []
+
+    def on_dialog(dialog):
+        dialogs.append({"type": dialog.type, "message": dialog.message})
+        try:
+            dialog.dismiss()
+        except Exception:
+            pass
+
+    page.on("dialog", on_dialog)
+    return dialogs
+
 
 def build_map(page):
     """Rebuild element_id -> Locator with the same ordering rules as the observer."""
@@ -43,6 +71,9 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event, pers
         navs, start = 0, time.time()
         t0 = time.time()
         completion_streak = 0
+        all_dialogs = capture_dialogs(page)
+        dialogs_seen = 0
+        last_action_dialogs = []
 
         def shot(name):
             path = f"screenshots/{session_id}_{name}.png"
@@ -75,7 +106,12 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event, pers
             obs = observe(page)
             emap = build_map(page)
             observe_ms = int((time.time() - observe_start) * 1000)
-            hint = completion_evidence(task, history, obs)
+            # A dialog is stronger evidence than a page-text keyword because
+            # it only ever appears as a direct, synchronous side effect of
+            # the single action that just ran (last_action_dialogs), not
+            # something that could be permanently present on every page
+            # (e.g. a nav-bar "Cart" link) regardless of what happened.
+            hint = dialog_completion_evidence(task, last_action_dialogs) or completion_evidence(task, history, obs)
             decide_start = time.time()
             action = provider.decide(obs, task, persona_desc, history, emap, persona_id=persona_id,
                                       completion_hint=hint)
@@ -97,6 +133,16 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event, pers
                                   if e["id"] == action.get("target")), None)
             result = execute(page, action, emap, settings)
             summary["duration_ms"] = int((time.time() - t0) * 1000)
+
+            # Any dialog the action itself triggered (e.g. a confirmation
+            # alert) is now sitting in all_dialogs, captured synchronously by
+            # on_dialog() during execute()'s blocking click()/fill() call.
+            # Make it available to the *next* iteration's completion check
+            # now; its own timeline event is emitted below, after the action
+            # event that caused it, so the timeline reads causally.
+            new_dialogs = all_dialogs[dialogs_seen:]
+            dialogs_seen = len(all_dialogs)
+            last_action_dialogs = new_dialogs
             act = action["action"]
             event_type = "BACKTRACK" if act == "navigate_back" else act.upper()
 
@@ -110,6 +156,11 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event, pers
                       "decide_ms": decide_ms,
                       "observe_ms": observe_ms,
                       "success": int(result["success"]), "error": result.get("error")})
+
+            for d in new_dialogs:
+                on_event({"event_type": "DIALOG", "url": page.url,
+                          "element_text": d["message"], "action": d["type"],
+                          "success": 1})
 
             if not result["success"] and act not in ("finish", "fail"):
                 on_event({"event_type": "ERROR", "url": page.url,

@@ -61,6 +61,59 @@ def completion_evidence(task: str, history: list[dict], obs: dict) -> str | None
     )
 
 
+def _word_overlap(a: str, b: str) -> bool:
+    """Loose, site-agnostic match between two already-extracted keywords:
+    identical, or sharing a common prefix at least as long as the shorter
+    word (capped at 4 chars). Bridges ordinary English inflections a naive
+    exact-match would miss (task word "add" vs. a dialog's "added", "book"
+    vs. "booking", "confirm" vs. "confirmed") without any stemming library
+    or site/product vocabulary.
+    """
+    if a == b:
+        return True
+    n = min(len(a), len(b), 4)
+    return n > 0 and a[:n] == b[:n]
+
+
+def dialog_completion_evidence(task: str, dialogs: list[dict] | None) -> str | None:
+    """Return evidence text if a native browser dialog (alert/confirm/prompt)
+    fired by the action just executed contains wording relevant to the
+    task's own words, else None.
+
+    `dialogs` is the small list of {"type", "message"} dicts captured from
+    Playwright's `dialog` event during the single most recently executed
+    action — not the whole session's history — so this only ever reflects a
+    dialog that appeared as a direct, synchronous side effect of that one
+    action, never a stale one from several steps ago.
+
+    Relevance is judged purely by keyword overlap with the task's own text
+    (via _word_overlap), the same generic approach as completion_evidence()
+    — never a hardcoded confirmation phrase for any specific site. A dialog
+    is stronger evidence than a page-text keyword match: the browser only
+    shows it in direct response to the action that just ran, whereas a page
+    keyword (e.g. a permanent nav-bar "Cart" link) can be present on every
+    page regardless of whether anything actually happened.
+    """
+    if not dialogs:
+        return None
+    task_words = extract_keywords(task)
+    if not task_words:
+        return None
+    for d in dialogs:
+        message = (d.get("message") or "").strip()
+        if not message:
+            continue
+        message_words = extract_keywords(message)
+        hits = [w for w in task_words if any(_word_overlap(w, m) for m in message_words)]
+        if hits:
+            dtype = d.get("type") or "dialog"
+            return (
+                f"A browser {dtype} appeared reading '{message}', which directly "
+                f"references {hits} from the task."
+            )
+    return None
+
+
 def evaluate_completion(streak: int, hint: str | None, action: dict) -> tuple[int, dict | None]:
     """Update the consecutive-strong-evidence streak and decide whether to
     override the model's decision with an automatic finish.
