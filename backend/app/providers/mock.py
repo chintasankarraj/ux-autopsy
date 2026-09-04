@@ -23,7 +23,8 @@ SIGNAL_OBSERVED_PHRASES = {
 class MockProvider(LLMProvider):
     name = "mock"
 
-    def decide(self, obs, task, _persona, history, _element_map, persona_id=None):
+    def decide(self, obs, task, _persona, history, _element_map, persona_id=None,
+               completion_hint=None):
         return decide_action(obs, task, persona_id or "custom", history)
 
     def autopsy(self, summary, friction, score):
@@ -67,4 +68,5 @@ class MockProvider(LLMProvider):
                 "recommendation": "Preserve current structure; validate with more personas.",
                 "confidence": 0.85,
             }]
-        return {"executive_summary": " ".join(parts), "root_causes": roots}
+        return {"executive_summary": " ".join(parts), "root_causes": roots,
+                "provider_used": "mock", "fallback": False, "fallback_reason": None}

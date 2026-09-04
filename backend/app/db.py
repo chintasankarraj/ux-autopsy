@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS events (
     confidence REAL,
     screenshot_path TEXT,
     duration_ms INTEGER,
+    decide_ms INTEGER,
     success INTEGER NOT NULL DEFAULT 1,
     error TEXT
 );
@@ -72,7 +73,9 @@ CREATE TABLE IF NOT EXISTS analyses (
     session_id TEXT PRIMARY KEY,
     executive_summary TEXT,
     root_causes TEXT,
-    provider TEXT
+    provider TEXT,
+    fallback INTEGER NOT NULL DEFAULT 0,
+    fallback_reason TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
@@ -160,6 +163,9 @@ def init_db() -> None:
         conn.executescript(SCHEMA)
         _ensure_column(conn, "friction_points", "why_json", "TEXT")
         _ensure_column(conn, "events", "confidence", "REAL")
+        _ensure_column(conn, "events", "decide_ms", "INTEGER")
+        _ensure_column(conn, "analyses", "fallback", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "analyses", "fallback_reason", "TEXT")
         conn.commit()
 
 

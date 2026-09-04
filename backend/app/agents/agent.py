@@ -4,6 +4,7 @@ from backend.app.config import settings
 from backend.app.browser.observer import observe, SELECTORS
 from backend.app.browser.executor import execute
 from backend.app.providers.base import get_provider
+from backend.app.agents.completion import completion_evidence, evaluate_completion
 
 ALLOWED_ACTIONS = {"click", "type", "scroll", "navigate_back", "wait", "finish", "fail"}
 
@@ -41,6 +42,7 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event, pers
         page = browser.new_page(viewport=viewport)
         navs, start = 0, time.time()
         t0 = time.time()
+        completion_streak = 0
 
         def shot(name):
             path = f"screenshots/{session_id}_{name}.png"
@@ -71,7 +73,11 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event, pers
                 break
             obs = observe(page)
             emap = build_map(page)
-            action = provider.decide(obs, task, persona_desc, history, emap, persona_id=persona_id)
+            hint = completion_evidence(task, history, obs)
+            decide_start = time.time()
+            action = provider.decide(obs, task, persona_desc, history, emap, persona_id=persona_id,
+                                      completion_hint=hint)
+            decide_ms = int((time.time() - decide_start) * 1000)
             if (
                 not isinstance(action, dict)
                 or action.get("action") not in ALLOWED_ACTIONS
@@ -79,6 +85,10 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event, pers
             ):
                 action = {"action": "wait", "reason": "Invalid or unsafe agent output; retrying.",
                           "confidence": 0.0}
+
+            completion_streak, override = evaluate_completion(completion_streak, hint, action)
+            if override:
+                action = override
 
             pre_url = page.url
             element_text = next((e["text"] for e in obs.get("elements", [])
@@ -95,6 +105,7 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event, pers
                       "confidence": action.get("confidence"),
                       "screenshot_path": shot(f"s{step}"),
                       "duration_ms": int((time.time() - t0) * 1000),
+                      "decide_ms": decide_ms,
                       "success": int(result["success"]), "error": result.get("error")})
 
             if not result["success"] and act not in ("finish", "fail"):

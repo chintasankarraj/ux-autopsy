@@ -1,8 +1,10 @@
 from backend.app.analysis.friction import detect_friction
 
-def _ev(t, eid=None, err=None, ts=0, url="u", reason=None, confidence=None, text=None):
+def _ev(t, eid=None, err=None, ts=0, url="u", reason=None, confidence=None, text=None,
+        decide_ms=None):
     return {"event_type": t, "element_id": eid, "error": err, "ts_ms": ts, "url": url,
-            "reason": reason, "confidence": confidence, "element_text": text}
+            "reason": reason, "confidence": confidence, "element_text": text,
+            "decide_ms": decide_ms}
 
 def test_repeated_clicks_detected():
     events = [_ev("CLICK", "BUTTON_01", ts=i * 100) for i in range(4)]
@@ -72,3 +74,51 @@ def test_explicit_failure_produces_friction():
     ]
     points, _ = detect_friction(events, {"actions_count": 2, "abandoned": False})
     assert any(p["signal"] == "task_failed" for p in points)
+
+
+def test_hesitation_not_flagged_when_gap_is_model_latency():
+    # A 70s gap that is almost entirely accounted for by the model's own
+    # decide() round-trip latency must NOT be reported as user hesitation.
+    events = [
+        _ev("CLICK", ts=0, confidence=0.8, text="A"),
+        _ev("CLICK", ts=70000, confidence=0.8, text="B", decide_ms=69900),
+    ]
+    points, _ = detect_friction(events, {"actions_count": 2})
+    assert not any(p["signal"] == "hesitation" for p in points)
+
+
+def test_hesitation_still_flagged_for_genuine_pause():
+    # Same total gap, but almost none of it is model latency — this is a
+    # real pause and should still be flagged.
+    events = [
+        _ev("CLICK", ts=0, confidence=0.8, text="A"),
+        _ev("CLICK", ts=70000, confidence=0.8, text="B", decide_ms=200),
+    ]
+    points, _ = detect_friction(events, {"actions_count": 2})
+    assert any(p["signal"] == "hesitation" for p in points)
+
+
+def test_incorrect_click_flagged_via_reasoning_mismatch_in_failed_session():
+    # High self-reported confidence, no TASK_SUCCESS anywhere — the old
+    # confidence-only heuristic would miss this entirely. The agent's own
+    # stated reason names a completely different product than what it
+    # actually clicked.
+    events = [
+        _ev("CLICK", "BUTTON_01", ts=0, confidence=0.9, text="Samsung galaxy s6",
+            reason="Sony vaio i5 matches the budget requirement."),
+        _ev("TASK_FAILURE", ts=500, reason="Ran out of actions."),
+    ]
+    points, _ = detect_friction(events, {"actions_count": 1, "abandoned": False})
+    assert any(p["signal"] == "incorrect_click" for p in points)
+
+
+def test_correct_click_not_flagged_in_failed_session():
+    # Same shape (high confidence, session still fails), but the reason and
+    # the clicked label agree — this must NOT be flagged.
+    events = [
+        _ev("CLICK", "BUTTON_01", ts=0, confidence=0.9, text="Sony vaio i5",
+            reason="Sony vaio i5 matches the budget requirement."),
+        _ev("TASK_FAILURE", ts=500, reason="Checkout button never appeared."),
+    ]
+    points, _ = detect_friction(events, {"actions_count": 1, "abandoned": False})
+    assert not any(p["signal"] == "incorrect_click" for p in points)

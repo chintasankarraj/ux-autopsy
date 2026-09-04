@@ -5,11 +5,157 @@ Last updated: 2026-09-04
 ## Summary
 
 UX Autopsy is now a working, end-to-end product with a genuinely
-evidence-driven demo (v1.1) — see "v1.1: realistic, evidence-driven demo"
-below for the latest round of work. Every item on the Phase 20 acceptance
-checklist (see below) passes locally. This document records what was
-inherited, what was broken, what was fixed, and what remains a known
-limitation.
+evidence-driven demo (v1.1) and, as of v1.2, more reliable real-world Gemini
+execution and more trustworthy evidence — see "v1.2: reliable real-world
+agent execution" below. Every item on the Phase 20 acceptance checklist (see
+below) passes locally. This document records what was inherited, what was
+broken, what was fixed, and what remains a known limitation.
+
+## v1.2: reliable real-world agent execution (2026-09-04)
+
+**Problem being solved:** a real Gemini baseline run against
+`https://www.demoblaze.com/` (persona: Confused Beginner, task: "Find a
+laptop priced below $800 and add it to the cart.") surfaced five real-world
+reliability/trust problems that the v1.1 demo-mode work never exercised,
+because demo mode only ever runs the deterministic mock/heuristic provider.
+All five were traced to an actual code path (not guessed) before any fix was
+written; none of the fixes are DemoBlaze-specific.
+
+1. **Fragile Gemini action parsing** (`providers/gemini.py`) — the old
+   `_parse()` was a single greedy regex (`\{.*\}`, DOTALL) spanning the
+   first `{` to the last `}` in the whole response. Real Gemini output
+   routinely wraps JSON in markdown fences, adds leading/trailing prose that
+   itself contains stray braces, or leaves a trailing comma — any of which
+   corrupted the greedy match. In the baseline, 12/25 (48%) of decisions hit
+   the safe fallback because of this. Replaced with
+   `providers/parsing.py::parse_agent_action()`: fence-stripping, a
+   brace/string-aware balanced-object scanner (not a regex), a
+   trailing-comma repair pass, schema validation against the actual action
+   whitelist, and an explicit ambiguity check (multiple distinct valid
+   candidates are rejected, not guessed at) — all schema-driven, no
+   site-specific vocabulary. 14 new unit tests in
+   `tests/test_gemini_parsing.py` cover the realistic formatting variations
+   above plus the safe-fallback/rejection paths.
+2. **No task-completion recognition** (`agents/agent.py`,
+   `agents/completion.py` — new) — the loop only ever finished when the
+   model itself emitted `finish`; nothing told it explicitly that the
+   requested end state might already be satisfied, so a long-running session
+   could drift back into exploring after actually finishing (observed:
+   Gemini reached the cart, verified the item, then resumed searching until
+   `MAX_ACTIONS`). `completion.py::completion_evidence()` derives a
+   site-agnostic signal purely from the task's own wording (a completion verb
+   already performed + an object keyword from the task still present on the
+   current page) and surfaces it to Gemini as an explicit `COMPLETION CHECK`
+   line in the prompt. `evaluate_completion()` is a conservative safety net:
+   only after the *same* strong evidence persists across two consecutive
+   decisions, and only if the model still hasn't finished, does the harness
+   override to `finish` — a single, unconfirmed observation never triggers
+   it. 8 unit tests cover detection, non-detection, generalization to an
+   unrelated task/site, and the override/streak/reset behavior.
+3. **Incorrect-click signal blind to confident wrong clicks**
+   (`analysis/friction.py`) — the only detector was "self-reported
+   `confidence < 0.45`," which works for the scripted mock persona (which
+   deliberately reports low confidence for its staged wrong click) but is
+   blind to a real Gemini call that clicks the wrong element while reporting
+   *high* confidence (baseline: reasoned about "Sony vaio i5," clicked
+   "Samsung galaxy s6" — no low-confidence signal existed to catch this, and
+   the only passing test for the signal happened to always end in
+   `TASK_SUCCESS`, i.e. the detector was never exercised in an unsuccessful
+   session). Added a second, independent detector,
+   `_reasoning_target_mismatch()`: a click is also flagged when the agent's
+   own stated `reason` names specific content words that share zero overlap
+   with the label of what it actually clicked — a general proxy for
+   "reasoned about A, clicked B" that requires no site vocabulary and no
+   session-outcome gating. 4 new tests cover a mismatched click in a *failed*
+   session, a correctly-matching click in a failed session (must not flag),
+   and the existing low-confidence/multi-step-flow tests still pass
+   unchanged.
+4. **Dishonest provider provenance** (`analysis/autopsy.py`,
+   `services/session_service.py`, `db.py`) — `GeminiProvider.autopsy()`
+   silently fell back to `MockProvider().autopsy()` on any exception or bad
+   JSON, and the caller reported `provider.name` (the outer instance type,
+   always `"gemini"`) regardless — so a Mock-generated narrative could be
+   filed and displayed as Gemini's. Separately, `sessions.provider` (set
+   correctly at session creation to the action-deciding provider) was
+   overwritten at the end of the run with this same wrong autopsy-provider
+   value. Fixed: `GeminiProvider.autopsy()`/`MockProvider.autopsy()` both now
+   return `provider_used`/`fallback`/`fallback_reason`; `run_autopsy()`
+   trusts those fields instead of the outer provider instance;
+   `sessions.provider` is never overwritten again (it stays the
+   action-provider for the whole session); `analyses` gained `fallback`/
+   `fallback_reason` columns. The results page now shows the action provider
+   and the autopsy provider separately, with an explicit "this text was NOT
+   generated by Gemini" note when a fallback occurred. 5 new tests cover the
+   Gemini-success, Gemini-failure→Mock-fallback (both exception and
+   invalid-JSON paths), Mock-direct, and the `run_autopsy()`
+   trust-the-actual-provider behavior.
+5. **Hesitation signal conflated with model latency**
+   (`analysis/friction.py`, `agents/agent.py`, `services/session_service.py`,
+   `db.py`) — event timestamps were stamped *after* `provider.decide()` (a
+   full Gemini API round trip) completed, so the gap between consecutive
+   events included however long Gemini took to respond. A 69.9s Gemini
+   round trip was misreported as a 69.9s user hesitation. Added a real,
+   measured `decide_ms` per event (timed around the actual `provider.decide()`
+   call in `agents/agent.py`, persisted via a new `events.decide_ms` column)
+   and changed hesitation detection to flag only the *residual* gap after
+   subtracting that measured model latency — no fabricated timing, just using
+   data the harness already has. 2 new tests confirm a latency-dominated gap
+   is not flagged while a genuine low-latency pause still is.
+
+**Also fixed while verifying (test-infrastructure, not application code):**
+`tests/test_api.py`'s session-completion fixture polled for a fixed 150s,
+shorter than the session's own `settings.max_session_seconds` (180s) plus
+the time a single slow real-LLM call or autopsy generation can add after
+that check — a legitimately-still-running real-Gemini session could read as
+"stuck." Changed the poll budget to derive from `settings.max_session_seconds`
+with a margin, instead of a shorter hardcoded number.
+
+**Test results (2026-09-04):** `pytest backend/tests/ -v` — 50/50 passed
+(includes a real, non-mocked Gemini session via `test_api.py`, run against
+the live API). `pyright` — 0 errors/0 warnings/0 informations. `npx tsc -b
+--force` — clean, no output. `npx playwright test` — 2/2 passed (the
+end-to-end test also runs a real Gemini-decided session).
+
+**Real Gemini regression run — blocked by exhausted API quota, not a code
+defect:** re-ran the exact baseline scenario
+(`https://www.demoblaze.com/`, persona `beginner`, task "Find a laptop
+priced below $800 and add it to the cart.") against the real Gemini API.
+The session ran to completion (`status: completed`, no crash), but all 25
+decisions returned the safe fallback ("LLM output invalid; safe fallback"),
+and `pages_visited` stayed at 1 — i.e. Gemini was never actually consulted
+successfully. Isolated by calling `model.generate_content()` directly
+outside the app: `google.api_core.exceptions.ResourceExhausted: 429 ... Quota
+exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests
+... quota_value: 20 ...` for the configured model (`gemini-3.5-flash`,
+free tier). The Phase 3 test run immediately before this (the full pytest
+suite run twice, `test_api.py`, and the Playwright e2e test — each launching
+a real Gemini-backed session of up to 25 actions × up to 2 retries) had
+already exhausted the day's free-tier allotment before the regression
+session ever made its first call. A follow-up direct API call after a short
+wait reproduced the same `ResourceExhausted` error, confirming this is the
+daily per-project/per-model cap, not a transient burst limit that would
+clear within the session.
+
+This is an honest, unmet acceptance item, not a claimed success: **the v1.2
+fixes have not yet been validated end-to-end against live demoblaze.com
+with a working Gemini connection** in this session. What the run does
+confirm is that the existing safe-fallback contract held under total,
+sustained real-world API failure — the session completed cleanly (no crash,
+no false completion, correct `abandonment`/friction reporting) rather than
+hanging or corrupting state. The parser, completion-recognition, and
+incorrect-click fixes were validated only via the unit tests above and the
+mocked-Gemini test in `test_provenance.py`, not via a live end-to-end
+demoblaze.com run. Re-running the regression once the daily quota resets (or
+with a paid-tier key) is the recommended next step and was intentionally not
+retried automatically in this session, per instruction not to retry a failed
+regression with modified behavior to force a different outcome.
+
+**Scope note:** no DemoBlaze-specific selector, product name, price, or URL
+path was added anywhere in `backend/app` or `frontend/src` (verified via
+`grep -rniE "demoblaze|samsung|sony vaio|galaxy s6" backend/app frontend/src`
+— no matches; those strings appear only in `test_friction.py` as realistic
+fixture data for the general-purpose reasoning-mismatch detector, not as
+application logic).
 
 ## v1.1: realistic, evidence-driven demo (2026-09-04)
 

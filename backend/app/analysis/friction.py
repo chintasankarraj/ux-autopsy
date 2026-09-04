@@ -1,3 +1,4 @@
+import re
 from collections import Counter
 
 WEIGHTS = {"repeated_action": 10, "backtrack": 8, "hesitation": 10, "error": 15,
@@ -10,6 +11,35 @@ HESITATION_MS = 6000
 # filter, pick a bracket, open checkout, confirm) since only the final click
 # is ever literally "last."
 LOW_CONFIDENCE = 0.45
+
+# Generic words that carry no target-identifying information, so their
+# presence in a "reason" string never counts as evidence of what the agent
+# meant to click — kept deliberately small and site-agnostic (no product,
+# brand, or selector vocabulary).
+_GENERIC_REASON_WORDS = {
+    "click", "open", "page", "link", "button", "control", "filter", "option",
+    "item", "this", "that", "using", "goal", "task", "search", "progresses",
+    "toward", "completing", "purchase", "matches", "best", "trying", "first",
+    "prominent", "closely", "reading", "without", "narrowing", "opening",
+    "budget", "right", "category",
+}
+
+
+def _content_words(text):
+    return {w for w in re.findall(r"[a-zA-Z]{4,}", (text or "").lower())
+            if w not in _GENERIC_REASON_WORDS}
+
+
+def _reasoning_target_mismatch(event):
+    """True when the agent's own stated reason names something specific that
+    doesn't overlap at all with the label of what it actually clicked — a
+    general, site-agnostic proxy for "reasoned about A but clicked B" that
+    works regardless of self-reported confidence or session outcome."""
+    reason_words = _content_words(event.get("reason"))
+    label_words = _content_words(event.get("element_text"))
+    if not reason_words or not label_words:
+        return False
+    return reason_words.isdisjoint(label_words)
 
 # Internal element ids (e.g. "button_06") are ephemeral, DOM-order-based
 # bookkeeping — never meaningful to a person reading an analysis. Anything
@@ -71,15 +101,26 @@ def detect_friction(events, summary):
                 f"Returned to an already-visited page ({e['url']}).", e["url"],
                 "Improve wayfinding so users reach goals without retracing steps.")
 
+    # The gap between two consecutive events includes however long the model
+    # itself took to respond (a full LLM API round trip), which is recorded
+    # per-event as `decide_ms` — real, measured latency, not a fabricated
+    # value. Subtracting it isolates the portion of the gap that could
+    # actually be user-like hesitation, so a slow model call is never
+    # misread as the agent pausing.
     prev = None
     for e in events:
-        if prev is not None and e["ts_ms"] - prev["ts_ms"] > HESITATION_MS \
-                and e["event_type"] not in ("WAIT", "PAGE_VIEW"):
-            add("hesitation", "Long hesitation before action", "MEDIUM",
-                f"{(e['ts_ms'] - prev['ts_ms']) / 1000:.1f}s pause before "
-                f"{e['event_type'].lower()}.",
-                _label(e, fallback=e["url"]),
-                "Likely decision uncertainty — clarify options at this step.")
+        if prev is not None and e["event_type"] not in ("WAIT", "PAGE_VIEW"):
+            gap_ms = e["ts_ms"] - prev["ts_ms"]
+            model_latency_ms = e.get("decide_ms") or 0
+            residual_ms = gap_ms - model_latency_ms
+            if residual_ms > HESITATION_MS:
+                add("hesitation", "Long hesitation before action", "MEDIUM",
+                    f"{residual_ms / 1000:.1f}s pause before "
+                    f"{e['event_type'].lower()}"
+                    + (f" (after excluding {model_latency_ms / 1000:.1f}s of model "
+                       "response time)." if model_latency_ms else "."),
+                    _label(e, fallback=e["url"]),
+                    "Likely decision uncertainty — clarify options at this step.")
         prev = e
 
     errs = [e for e in events if e["event_type"] == "ERROR"]
@@ -88,23 +129,49 @@ def detect_friction(events, summary):
             "; ".join((e.get("error") or "unknown") for e in errs[:3]),
             _label(errs[0], fallback=""), "Ensure interaction targets are stable and visible.")
 
-    # Evidence-based: clicks the agent itself made with low confidence are
-    # genuinely shaky attempts, not just steps that happened before the last
-    # one — a multi-step flow (open filter, pick bracket, open checkout,
-    # confirm) is not "incorrect" just because only its final click is last.
+    # Evidence-based, in two independent forms — neither depends on the
+    # session having reached TASK_SUCCESS, so a confidently-wrong click in an
+    # unsuccessful or partial session is just as visible as a low-confidence
+    # one in a successful one:
+    #  1. Self-reported low confidence — a genuinely shaky attempt, not just
+    #     a step that happened before the last one (a multi-step flow — open
+    #     filter, pick bracket, checkout, confirm — isn't "incorrect" just
+    #     because only its final click is last).
+    #  2. Reasoning/target mismatch — the agent's own stated reason names
+    #     something with no overlap at all with what it actually clicked
+    #     (e.g. reasoning about one product but clicking another). This
+    #     catches a confidently-wrong click that (1) alone would miss,
+    #     without ever inspecting site-specific selectors or content.
+    click_events = [e for e in events if e["event_type"] == "CLICK"]
     low_conf_clicks = [
-        e for e in events
-        if e["event_type"] == "CLICK" and e.get("confidence") is not None
-        and e["confidence"] < LOW_CONFIDENCE
+        e for e in click_events
+        if e.get("confidence") is not None and e["confidence"] < LOW_CONFIDENCE
     ]
-    if low_conf_clicks:
-        labels = [_label(e) for e in low_conf_clicks]
+    mismatched_clicks = [
+        e for e in click_events
+        if e not in low_conf_clicks and _reasoning_target_mismatch(e)
+    ]
+    incorrect_clicks = low_conf_clicks + mismatched_clicks
+    if incorrect_clicks:
+        low_labels = [_label(e) for e in low_conf_clicks]
+        mismatch_labels = [_label(e) for e in mismatched_clicks]
+        evidence_parts = []
+        if low_labels:
+            evidence_parts.append(
+                f"Interacted with {', '.join(repr(l) for l in low_labels)} with low confidence "
+                "(the agent's own uncertainty at decision time) before proceeding."
+            )
+        if mismatch_labels:
+            evidence_parts.append(
+                f"Clicked {', '.join(repr(l) for l in mismatch_labels)} despite stating a reason "
+                "that referred to something else entirely — the action didn't match the agent's "
+                "own stated reasoning."
+            )
         add("incorrect_click",
-            f"{len(low_conf_clicks)} low-confidence interaction(s)",
-            "HIGH" if len(low_conf_clicks) >= 2 else "MEDIUM",
-            f"Interacted with {', '.join(repr(l) for l in labels)} with low confidence "
-            f"(the agent's own uncertainty at decision time) before proceeding.",
-            labels[0],
+            f"{len(incorrect_clicks)} likely incorrect interaction(s)",
+            "HIGH" if len(incorrect_clicks) >= 2 else "MEDIUM",
+            " ".join(evidence_parts),
+            (low_labels or mismatch_labels)[0],
             "Make the correct control easier to distinguish from similar-looking alternatives "
             "nearby.")
 

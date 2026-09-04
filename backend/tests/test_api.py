@@ -14,7 +14,14 @@ def session_id():
                     json={"url": DEMO, "task": TASK, "persona": "budget_shopper"})
     assert r.status_code == 201
     sid = r.json()["id"]
-    for _ in range(150):
+    # The session's own internal budget is settings.max_session_seconds, checked
+    # only at the top of each loop iteration — a single slow decide() call (a
+    # real LLM API round trip) can finish after that check, plus autopsy
+    # generation runs afterward. Wait at least that long, with a margin, rather
+    # than a shorter fixed budget that can flag a still-legitimately-running
+    # session as stuck.
+    max_wait_s = settings.max_session_seconds + 90
+    for _ in range(max_wait_s):
         s = client.get(f"/api/sessions/{sid}").json()
         if s["status"] in ("completed", "failed"):
             break

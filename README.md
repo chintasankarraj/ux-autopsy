@@ -159,8 +159,14 @@ Two providers implement this interface:
   Python keyword-matching heuristics. No network calls. This is what powers
   demo mode.
 - **Gemini provider** (`providers/gemini.py`) — prompts Gemini for the same
-  structured JSON, with the same target-ID validation, and falls back to the
-  mock provider's narrative if the model output is unparseable.
+  structured JSON, parsed by `providers/parsing.py` (fence-stripping,
+  balanced-brace extraction, and schema validation — robust to markdown
+  fences and surrounding prose, not just bare JSON), with the same target-ID
+  validation. If Gemini's autopsy call fails or returns unparseable output,
+  it falls back to the mock provider's narrative — but that fallback is
+  always recorded and surfaced (`analyses.provider`/`fallback`/
+  `fallback_reason`, shown on the results page), never presented as if
+  Gemini produced it.
 
 The **numerical UX score is never produced by an LLM** — it comes from
 `analysis/scoring.py`, a fixed weighted formula. The LLM (or, in demo mode,
@@ -308,9 +314,18 @@ npx playwright test
   site's markup, so pointing demo-mode personas at an arbitrary real website
   won't reproduce this same nuanced behavior (the Gemini path handles
   arbitrary sites; the mock path is a demo, not a general-purpose agent).
-- The `incorrect_click` friction signal relies on the acting provider
-  reporting an honest confidence value per action; a provider that always
-  reports high confidence will under-report this signal.
+- The `incorrect_click` friction signal combines two independent detectors:
+  self-reported low confidence, and a mismatch between the provider's stated
+  `reason` and the label of what it actually clicked. A provider that always
+  reports high confidence *and* never states a specific reason (an empty or
+  generic `reason` string) can still under-report this signal, since neither
+  detector has anything to compare against.
+- The real-Gemini free tier has a low daily request quota (as observed:
+  20 requests/day for a `generativelanguage.googleapis.com` model on the
+  free tier) — a single test suite run plus a full ~25-action session can
+  exhaust it, after which the app correctly falls back to `wait`/mock
+  behavior rather than crashing, but no further real Gemini decisions are
+  possible until the quota resets.
 - SQLite with a single writer lock is fine for local/demo use, not for
   concurrent production traffic.
 - No authentication — this is a local developer/demo tool, not intended to

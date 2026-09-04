@@ -30,4 +30,17 @@ def run_autopsy(events, summary):
                 "confidence": rc.get("confidence"),
             }
 
-    return {"friction_points": fps, "score": score, "ai": ai, "provider": provider.name}
+    # The provider instance's own `.name` reflects which class was
+    # configured, not which one actually produced this narrative — a Gemini
+    # instance whose autopsy() call failed internally returns Mock-generated
+    # content while still being a `GeminiProvider`. Trust the provider's own
+    # report of what it actually used instead of the outer instance type.
+    provider_used = ai.get("provider_used", provider.name)
+    return {
+        "friction_points": fps,
+        "score": score,
+        "ai": ai,
+        "provider": provider_used,
+        "fallback": bool(ai.get("fallback", False)),
+        "fallback_reason": ai.get("fallback_reason"),
+    }

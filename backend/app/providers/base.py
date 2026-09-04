@@ -4,7 +4,8 @@ class LLMProvider(ABC):
     name = "base"
 
     @abstractmethod
-    def decide(self, observation, task, persona, history, element_map, persona_id=None): ...
+    def decide(self, observation, task, persona, history, element_map, persona_id=None,
+               completion_hint=None): ...
 
     @abstractmethod
     def autopsy(self, session_summary, friction_points, score): ...

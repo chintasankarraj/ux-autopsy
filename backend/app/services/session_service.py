@@ -87,11 +87,12 @@ def _run(sid, url, task, persona, custom):
         ev["ts_ms"] = int((time.time() - start) * 1000)
         db.execute(
             """INSERT INTO events (session_id,ts_ms,event_type,url,element_id,
-              element_text,action,reason,confidence,screenshot_path,duration_ms,success,error)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              element_text,action,reason,confidence,screenshot_path,duration_ms,decide_ms,
+              success,error)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (sid, ev["ts_ms"], ev["event_type"], ev.get("url"), ev.get("element_id"),
              ev.get("element_text"), ev.get("action"), ev.get("reason"), ev.get("confidence"),
-             ev.get("screenshot_path"), ev.get("duration_ms"),
+             ev.get("screenshot_path"), ev.get("duration_ms"), ev.get("decide_ms"),
              ev.get("success", 1), ev.get("error")),
         )
         db.commit()
@@ -129,16 +130,23 @@ def _run(sid, url, task, persona, custom):
 
         score = autopsy["score"]
         db.execute(
-            """INSERT INTO analyses (session_id,executive_summary,root_causes,provider)
-              VALUES (?,?,?,?)""",
+            """INSERT INTO analyses (session_id,executive_summary,root_causes,provider,
+              fallback,fallback_reason)
+              VALUES (?,?,?,?,?,?)""",
             (sid, autopsy["ai"]["executive_summary"],
-             json.dumps(autopsy["ai"]["root_causes"]), autopsy["provider"]),
+             json.dumps(autopsy["ai"]["root_causes"]), autopsy["provider"],
+             int(autopsy.get("fallback", False)), autopsy.get("fallback_reason")),
         )
 
+        # `sessions.provider` is set once at creation time (settings.resolved_provider)
+        # and represents the ACTION-deciding provider for the whole session — it is
+        # deliberately never overwritten here with the autopsy/narrative provider,
+        # which can legitimately differ (e.g. Gemini decided actions but its autopsy
+        # call failed and fell back to Mock; see `analyses.provider`/`fallback`).
         db.execute(
             """UPDATE sessions SET status='completed', finished_at=?, completed=?,
               actions_count=?, duration_ms=?, pages_visited=?, friction_count=?, ux_score=?,
-              score_breakdown=?, provider=? WHERE id=?""",
+              score_breakdown=? WHERE id=?""",
             (
                 now_iso(),
                 int(bool(summary.get("completed"))),
@@ -148,7 +156,6 @@ def _run(sid, url, task, persona, custom):
                 len(autopsy["friction_points"]),
                 score["ux_score"],
                 json.dumps(score),
-                autopsy["provider"],
                 sid,
             ),
         )

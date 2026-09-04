@@ -7,6 +7,7 @@ export interface Session {
   completed: number | null; actions_count: number | null; duration_ms: number | null;
   pages_visited: number | null; friction_count: number | null; ux_score: number | null;
   score_breakdown: ScoreBreakdown | null; error: string | null; started_at: string;
+  provider?: string | null;
   progress?: { step: string; idx: number } | null;
 }
 export interface FrictionWhy {
@@ -27,6 +28,7 @@ export interface RootCause {
 }
 export interface Analysis {
   executive_summary: string; root_causes: RootCause[]; provider: string;
+  fallback?: boolean | number; fallback_reason?: string | null;
 }
 export interface EventItem {
   id: number; event_type: string; url: string; element_id: string | null;
