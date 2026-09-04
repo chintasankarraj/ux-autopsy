@@ -4,10 +4,132 @@ Last updated: 2026-09-04
 
 ## Summary
 
-UX Autopsy is now a working, end-to-end product. Every item on the Phase 20
-acceptance checklist (see below) passes locally. This document records what
-was inherited, what was broken, what was fixed, and what remains a known
+UX Autopsy is now a working, end-to-end product with a genuinely
+evidence-driven demo (v1.1) — see "v1.1: realistic, evidence-driven demo"
+below for the latest round of work. Every item on the Phase 20 acceptance
+checklist (see below) passes locally. This document records what was
+inherited, what was broken, what was fixed, and what remains a known
 limitation.
+
+## v1.1: realistic, evidence-driven demo (2026-09-04)
+
+**Problem being solved:** the demo previously behaved like a scripted
+happy path (91.5 score, 4 actions, 0 friction, every persona identical) —
+technically working but unconvincing as a demonstration of *why* UX Autopsy
+is useful. This round made persona behavior, friction detection, and the
+autopsy narrative genuinely evidence-driven, without hard-coding any result.
+
+**What changed, by area:**
+
+- **Demo site redesign** (`backend/app/browser/demo_site.html`) — PixelMart
+  now has deliberate, structural (not random) UX friction: "Add to Cart"
+  sits beside "Buy Now"; the price filter is a low-contrast toggle grouped
+  tightly against the sort pills; at a narrow viewport the filter collapses
+  behind a "☰ Menu" button. Category and price are real, functional
+  client-side facets (button pills, not `<select>` — the agent's action
+  whitelist has no "select an option" action, so keeping filters as buttons
+  avoided a larger, riskier change to that whitelist).
+- **Persona-differentiated heuristic** (`backend/app/agents/heuristic.py`) —
+  rewritten around a per-persona behavior profile (which controls to try, in
+  what order, with a plausible wrong-first-attempt for some personas, a real
+  `time.sleep()`-based hesitation for Beginner, and a real 390×844 viewport
+  for Mobile User set in `agents/agent.py`). Verified via a scripted run of
+  all 5 personas that every one produces a **distinct event-label
+  sequence** (see "Persona verification" below).
+- **`incorrect_click` friction signal, done right** — the first version of
+  this (in the prior diagnostic-cleanup session) flagged *every* click that
+  wasn't literally the last one, which false-positives on any legitimate
+  multi-step flow. Redefined around the action's own `confidence` value
+  (now persisted per event, `events.confidence`): a genuinely low-confidence
+  click is real evidence of a shaky attempt; a confident necessary step
+  never is. Two new unit tests lock this in
+  (`test_low_confidence_click_produces_incorrect_click_friction`,
+  `test_multi_step_confident_flow_has_no_incorrect_click_friction`).
+- **"Why did this happen?"** — each root-cause entry the provider generates
+  is merged back onto its corresponding friction point by index
+  (`analysis/autopsy.py`), persisted as `friction_points.why_json`, and
+  rendered as an expandable panel in `FrictionList.tsx` showing observed
+  behavior / possible cause / likely root cause / recommendation /
+  confidence — generated from that session's real evidence, not invented
+  fresh for display.
+- **Screenshots surfaced in the timeline** — this turned out to already be
+  wired up in `Timeline.tsx` from earlier work; verified it actually
+  renders (`naturalWidth`/`naturalHeight` checked via Playwright, not just
+  "no console error") and added a graceful fallback (`onError` hides a
+  broken image and shows "Screenshot unavailable" instead). Also enriched
+  the expanded event panel with explicit Timestamp/URL, and cross-referenced
+  events against friction points by label so a friction-causing event shows
+  an inline "Related friction" note with a severity badge.
+- **Score consistency fix** — `providers/mock.py`'s narrative used
+  `{score:.0f}` (rounds to nearest integer) while the results page showed
+  the raw one-decimal value, so 91.5 could narrate as "92". Both now use
+  `.1f`, one source of truth.
+- **`GEMINI_MODEL` respected** — found while touching `providers/gemini.py`:
+  `GenerativeModel("gemini-1.5-flash")` was hardcoded, silently ignoring the
+  configured model. Now uses `settings.gemini_model`.
+
+**Bugs found and fixed while verifying this (all confirmed via real
+Playwright sessions, not just code review):**
+
+1. `_best_price_pill` picked the *first* "Under ₹X" pill in DOM order
+   (₹30,000) instead of the bracket matching the task's actual budget
+   (₹60,000) — filtered the target product out of the grid entirely. Fixed
+   by parsing the task's `₹` amount and every pill's own amount, then
+   picking the tightest bracket that still covers the budget.
+2. The generic keyword best-match fallback had no "already clicked this"
+   guard, so once the correct price pill's specific label was excluded (via
+   fix above) it would loop forever re-selecting an unhelpful pill until the
+   action budget ran out (~150s, ending in `task_failed`). Added an
+   already-clicked-by-label guard to all three fallback blocks (a general
+   robustness fix, not persona-specific).
+3. `_keywords()` kept purely-numeric tokens (`"000"` out of "₹60,000"),
+   which coincidentally substring-matches *every* price pill's label
+   ("Under ₹30,000" also contains "000") — caused false keyword-relevance
+   matches that made Budget Shopper click through all three price brackets.
+   Numbers are now excluded from generic keyword matching; `_target_price()`
+   handles numeric amounts specifically instead.
+4. My own manual `curl -d '...'` testing mangled the ₹ character via shell
+   encoding (became a literal `?`), which surfaced bug #1 in a confusing
+   way before I isolated it as a test-harness artifact, not a product bug —
+   noted here since it cost real debugging time and the fix (writing
+   request bodies to a UTF-8 file, `curl --data-binary @file`) is worth
+   remembering for future manual API testing on this stack.
+
+**Persona verification** (scripted run against a live server, all 5
+personas, same task): every persona produced a distinct event-label
+sequence and different friction signals —
+
+| Persona | Actions | UX Score | Friction |
+|---|---|---|---|
+| Budget Shopper | 7 | 83.6 | none |
+| Power User | 6 | 85.0 | none (shortest path — skips search) |
+| Confused Beginner | 5 (+7s real hesitation) | 85.5 | `hesitation`, `incorrect_click` |
+| Impatient User | 5 | 86.7 | `incorrect_click` |
+| Mobile User | 8 | 82.2 | none (extra action opening the mobile menu) |
+
+A separate run of Impatient User against a mismatched task (no matching
+product on the demo site) produced a genuine, honestly-earned failure:
+`completed: false`, `ux_score: 46.1`, with `task_failed` and
+`incorrect_click` friction — demonstrating the realistic-low-score case
+without ever hard-coding a score or fabricating an event.
+
+**Environment note — a session-local port artifact:** partway through this
+round, `localhost:8000` became unreachable through normal process
+management — `netstat`/`Get-NetTCPConnection` reported it LISTENING under a
+PID that neither `tasklist`, `Get-Process`, nor a WMI query could find, and
+`Stop-Process`/`taskkill` on that PID reported "no such process." It kept
+answering real HTTP requests throughout. This is almost certainly an
+orphaned WSL/container network port-forward left over from very early in
+this long session, invisible to native Windows process tools. All testing
+in this round was done on port 8001 instead (temporarily repointing
+`vite.config.ts`'s proxy and `NewTest.tsx`'s `DEMO_URL`, both reverted to
+8000 before finishing) and `backend/tests/test_api.py`'s hardcoded demo URL
+was changed to `settings.demo_url` (respects `PORT`) so it no longer
+silently depends on a literal 8000. This is a one-off artifact of this
+session's history, not a code or configuration defect — a fresh environment
+won't have it, but if you hit the same symptom, using a different `PORT` env
+var value works around it without needing to resolve the underlying stuck
+socket.
 
 ## What was inherited
 
@@ -116,10 +238,10 @@ tests → manual browser verification.
 
 ## Known limitations (not fixed — by design or out of scope)
 
-- The mock/heuristic provider does not vary its decisions by persona; only
-  the Gemini path does. Documented in the README.
-- Per-event screenshots are captured to disk but not shown in the timeline
-  UI.
+- The mock/heuristic provider's persona-differentiated behavior (see v1.1
+  above) is tuned specifically against the bundled demo site's markup — it
+  won't reproduce nuanced, persona-specific behavior against an arbitrary
+  real website the way the Gemini path can. Documented in the README.
 - SQLite with a global write lock is appropriate for local/demo use only.
 - No authentication/authorization — this is a local tool.
 

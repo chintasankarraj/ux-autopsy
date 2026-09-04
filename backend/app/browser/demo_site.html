@@ -8,18 +8,37 @@
   header { background: #10151f; color: #fff; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
   header .brand { font-weight: 700; font-size: 18px; }
   header .cart { font-size: 13px; color: #cfd6e4; }
-  .toolbar { display: flex; gap: 10px; padding: 14px 24px; background: #fff; border-bottom: 1px solid #e5e5e5; align-items: center; flex-wrap: wrap; }
-  .toolbar input { flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; }
-  .toolbar select { padding: 7px 12px; border: 1px solid #ccc; background: #fafafa; border-radius: 6px; font-size: 13px; }
+  header .menu-btn { display: none; background: transparent; border: 1px solid #3a4356; color: #fff; border-radius: 6px; padding: 6px 10px; font-size: 14px; cursor: pointer; }
+
+  /* Sort and filter are deliberately grouped close together with similar
+     styling weight — a realistic source of confusion, not a fabricated bug. */
+  .toolbar { display: flex; gap: 8px; padding: 14px 24px; background: #fff; border-bottom: 1px solid #e5e5e5; align-items: center; flex-wrap: wrap; }
+  .toolbar input { flex: 1; min-width: 180px; padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; }
+  .sort-group { display: flex; gap: 4px; }
+  .sort-pill { padding: 7px 10px; border: 1px solid #ccc; background: #fafafa; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  .sort-pill.active { background: #10151f; color: #fff; border-color: #10151f; }
+  /* Low-contrast, text-only trigger — the price filter is real but easy to miss. */
+  #filter-toggle { font-size: 12px; color: #999; text-decoration: underline; background: none; border: none; cursor: pointer; padding: 7px 4px; }
+
   #filter-panel { display: none; padding: 12px 24px; background: #eef1f6; border-bottom: 1px solid #dde; }
   #filter-panel.open { display: block; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; padding: 20px 24px; }
+  .facet-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0; }
+  .facet-label { font-size: 12px; color: #667; width: 64px; }
+  .facet-pill { padding: 6px 10px; border: 1px solid #c7cede; background: #fff; border-radius: 999px; font-size: 12px; cursor: pointer; }
+  .facet-pill.active { background: #0f766e; color: #fff; border-color: #0f766e; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 16px; padding: 20px 24px; }
   .card { background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; padding: 12px; }
-  .card h3 { font-size: 14px; margin: 8px 0 4px; }
+  .card h3 { font-size: 14px; margin: 8px 0 2px; }
+  .card .spec { font-size: 11px; color: #8a93a6; margin-bottom: 6px; }
   .card .price { color: #444; font-size: 13px; margin-bottom: 8px; font-weight: 600; }
-  .card button { width: 100%; padding: 8px; background: #10151f; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .card button:disabled { background: #94a3b8; cursor: default; }
   .card .swatch { height: 90px; background: #d9dce3; border-radius: 6px; }
+  .card .actions { display: flex; gap: 6px; }
+  .card .actions button { flex: 1; padding: 8px 4px; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .card .add-to-cart { background: #eef1f6; color: #10151f; border: 1px solid #ccd3e0 !important; }
+  .card .buy-now { background: #10151f; color: #fff; }
+  .card button:disabled { background: #cbd2e0; color: #667; cursor: default; border-color: #cbd2e0 !important; }
+
   #checkout-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); align-items: center; justify-content: center; }
   #checkout-modal.open { display: flex; }
   .modal-box { background: #fff; padding: 20px; border-radius: 8px; width: 320px; }
@@ -29,35 +48,55 @@
   #confirm.open { display: block; }
   .hint { font-size: 12px; color: #888; padding: 0 24px 12px; }
   .empty { padding: 40px 24px; text-align: center; color: #888; font-size: 13px; }
+
+  /* Mobile: the filter/sort toolbar collapses behind a menu button, and
+     re-appears as an overlay panel — a real, common source of mobile-only
+     friction (an extra tap just to reach controls visible by default on
+     desktop), not an artificial defect. */
+  @media (max-width: 480px) {
+    header .menu-btn { display: inline-block; }
+    .toolbar .sort-group, .toolbar #filter-toggle { display: none; }
+    .toolbar.mobile-open .sort-group, .toolbar.mobile-open #filter-toggle { display: flex; }
+    .toolbar.mobile-open { flex-direction: column; align-items: stretch; }
+  }
 </style>
 </head>
 <body>
 <header>
   <div class="brand">PixelMart</div>
-  <div class="cart">Cart: <span id="cart-badge">0</span></div>
+  <div style="display:flex; align-items:center; gap:10px;">
+    <button class="menu-btn" id="menu-btn">☰ Menu</button>
+    <div class="cart">Cart: <span id="cart-badge">0</span></div>
+  </div>
 </header>
 
-<div class="toolbar">
+<div class="toolbar" id="toolbar">
   <input id="search-input" placeholder="Search products..." />
-  <select id="sort-select">
-    <option>Sort: Featured</option>
-    <option>Sort: Price Low-High</option>
-    <option>Sort: Price High-Low</option>
-  </select>
-  <a href="#" id="filter-toggle" style="font-size:12px;color:#999;text-decoration:underline;">filter options</a>
+  <div class="sort-group">
+    <button class="sort-pill active" data-sort="featured">Featured</button>
+    <button class="sort-pill" data-sort="price-asc">Price ↑</button>
+    <button class="sort-pill" data-sort="price-desc">Price ↓</button>
+  </div>
+  <button id="filter-toggle">Filter ▾</button>
 </div>
 
 <div id="filter-panel">
-  <label style="font-size:13px;">Category:</label>
-  <select id="category-select">
-    <option value="all">All</option>
-    <option value="laptop">Laptops</option>
-    <option value="phone">Phones</option>
-    <option value="audio">Audio</option>
-  </select>
+  <div class="facet-row">
+    <span class="facet-label">Category</span>
+    <button class="facet-pill" data-cat="laptop">Laptops</button>
+    <button class="facet-pill" data-cat="phone">Phones</button>
+    <button class="facet-pill" data-cat="audio">Audio</button>
+  </div>
+  <div class="facet-row">
+    <span class="facet-label">Price</span>
+    <button class="facet-pill" data-price="30000">Under ₹30,000</button>
+    <button class="facet-pill" data-price="60000">Under ₹60,000</button>
+    <button class="facet-pill" data-price="100000">Under ₹1,00,000</button>
+    <button class="facet-pill" data-price="0">All prices</button>
+  </div>
 </div>
 
-<p class="hint">Try: find a laptop under ₹60,000 and add it to the cart.</p>
+<p class="hint">Try: find a laptop under ₹60,000 and complete the purchase.</p>
 
 <div class="grid" id="product-grid"></div>
 
@@ -75,19 +114,33 @@
 </div>
 
 <script>
-  // Laptop listed first so the deterministic demo heuristic (which does keyword
-  // matching, not price reasoning) reliably lands on the in-budget item.
+  // AeroBook listed first so a naive first-match strategy still tends to land
+  // on an in-budget laptop; category/price facets narrow reliably regardless.
   const products = [
-    { id: "laptop-aero", name: "AeroBook 14 Laptop", price: 54999, cat: "laptop" },
-    { id: "laptop-titan", name: "TitanBook Pro Laptop", price: 78499, cat: "laptop" },
-    { id: "phone-nova", name: "NovaPhone X", price: 34999, cat: "phone" },
-    { id: "audio-sonic", name: "SonicWave Headphones", price: 2499, cat: "audio" },
+    { id: "laptop-aero", name: "AeroBook 14 Laptop", spec: "Intel i5 · 8GB RAM · 256GB SSD", price: 54999, cat: "laptop" },
+    { id: "laptop-titan", name: "TitanBook Pro Laptop", spec: "Intel i7 · 16GB RAM · 512GB SSD", price: 78499, cat: "laptop" },
+    { id: "phone-nova", name: "NovaPhone X", spec: "6.1in · 128GB · 5G", price: 34999, cat: "phone" },
+    { id: "audio-sonic", name: "SonicWave Headphones", spec: "ANC · 30hr battery", price: 2499, cat: "audio" },
   ];
 
   const grid = document.getElementById("product-grid");
   const fmt = (n) => "₹" + n.toLocaleString("en-IN");
 
-  function render(list) {
+  const state = { query: "", cat: null, maxPrice: null, sort: "featured" };
+
+  function visibleList() {
+    let list = products;
+    if (state.query) list = list.filter((p) => p.name.toLowerCase().includes(state.query));
+    if (state.cat) list = list.filter((p) => p.cat === state.cat);
+    if (state.maxPrice) list = list.filter((p) => p.price < state.maxPrice);
+    list = [...list];
+    if (state.sort === "price-asc") list.sort((a, b) => a.price - b.price);
+    if (state.sort === "price-desc") list.sort((a, b) => b.price - a.price);
+    return list;
+  }
+
+  function render() {
+    const list = visibleList();
     grid.innerHTML = "";
     if (list.length === 0) {
       grid.innerHTML = '<div class="empty">No products match your search.</div>';
@@ -96,45 +149,86 @@
     list.forEach((p) => {
       const el = document.createElement("div");
       el.className = "card";
-      el.innerHTML = `<div class="swatch"></div><h3>${p.name}</h3><div class="price">${fmt(p.price)}</div>
-        <button data-id="${p.id}" class="buy-now">Buy Now</button>`;
+      el.innerHTML = `<div class="swatch"></div><h3>${p.name}</h3><div class="spec">${p.spec}</div>
+        <div class="price">${fmt(p.price)}</div>
+        <div class="actions">
+          <button data-id="${p.id}" class="add-to-cart">Add to Cart</button>
+          <button data-id="${p.id}" class="buy-now">Buy Now</button>
+        </div>`;
       grid.appendChild(el);
     });
   }
-  render(products);
+  render();
 
   let cartCount = 0;
-  function applyFilters() {
-    const q = document.getElementById("search-input").value.trim().toLowerCase();
-    const cat = document.getElementById("category-select").value;
-    let list = products;
-    if (q) list = list.filter((p) => p.name.toLowerCase().includes(q));
-    if (cat !== "all") list = list.filter((p) => p.cat === cat);
-    render(list);
-  }
-  document.getElementById("search-input").addEventListener("input", applyFilters);
-  document.getElementById("category-select").addEventListener("change", applyFilters);
+  const bump = () => { cartCount++; document.getElementById("cart-badge").textContent = cartCount; };
 
+  document.getElementById("search-input").addEventListener("input", (e) => {
+    state.query = e.target.value.trim().toLowerCase();
+    render();
+  });
+
+  document.querySelectorAll(".sort-pill").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".sort-pill").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.sort = btn.dataset.sort;
+      render();
+    });
+  });
+
+  document.getElementById("filter-toggle").addEventListener("click", () => {
+    document.getElementById("filter-panel").classList.toggle("open");
+  });
+
+  document.querySelectorAll(".facet-pill[data-cat]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".facet-pill[data-cat]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.cat = btn.dataset.cat;
+      render();
+    });
+  });
+
+  document.querySelectorAll(".facet-pill[data-price]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".facet-pill[data-price]").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      const v = Number(btn.dataset.price);
+      state.maxPrice = v > 0 ? v : null;
+      render();
+    });
+  });
+
+  // Add to Cart quietly adds one unit and stays on the page — a plausible
+  // first click for "get this item" that doesn't actually reach checkout.
+  // Buy Now adds one unit and opens checkout directly. Both remain usable
+  // (multiple adds are allowed), matching real storefront behavior.
   document.body.addEventListener("click", (e) => {
+    if (e.target.classList.contains("add-to-cart")) {
+      bump();
+      e.target.textContent = "Added ✓";
+      setTimeout(() => { e.target.textContent = "Add to Cart"; }, 1500);
+    }
     if (e.target.classList.contains("buy-now")) {
-      cartCount++;
-      document.getElementById("cart-badge").textContent = cartCount;
-      e.target.textContent = "Added";
-      // Disable every Buy Now button (not just this one) so none of them sit
-      // beneath the checkout overlay still enabled-but-unreachable.
+      bump();
+      // Disable every Buy Now button (not just this one) once checkout has
+      // started — otherwise another product's still-enabled Buy Now sits
+      // beneath the modal overlay, unreachable but still "visible" to a
+      // naive re-scan, which is exactly the kind of stuck-click trap this
+      // demo is meant to model deliberately elsewhere, not accidentally here.
       document.querySelectorAll(".buy-now").forEach((b) => { b.disabled = true; });
       document.getElementById("checkout-modal").classList.add("open");
     }
   });
 
-  document.getElementById("filter-toggle").addEventListener("click", (e) => {
-    e.preventDefault();
-    document.getElementById("filter-panel").classList.toggle("open");
-  });
-
   document.getElementById("buy-btn").addEventListener("click", () => {
     document.getElementById("checkout-modal").classList.remove("open");
     document.getElementById("confirm").classList.add("open");
+  });
+
+  document.getElementById("menu-btn").addEventListener("click", () => {
+    document.getElementById("toolbar").classList.toggle("mobile-open");
   });
 </script>
 </body>

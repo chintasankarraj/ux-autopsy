@@ -2,8 +2,40 @@ from collections import Counter
 
 WEIGHTS = {"repeated_action": 10, "backtrack": 8, "hesitation": 10, "error": 15,
            "dead_end": 12, "abandonment": 30, "excessive_actions": 12, "repeated_search": 10,
-           "task_failed": 20}
+           "task_failed": 20, "incorrect_click": 15}
 HESITATION_MS = 6000
+# A click the agent itself made with confidence below this is a genuinely
+# shaky attempt, not just "not the very last click" — the latter would
+# false-positive on every necessary step of any multi-step flow (open a
+# filter, pick a bracket, open checkout, confirm) since only the final click
+# is ever literally "last."
+LOW_CONFIDENCE = 0.45
+
+# Internal element ids (e.g. "button_06") are ephemeral, DOM-order-based
+# bookkeeping — never meaningful to a person reading an analysis. Anything
+# shown in user-facing text uses the element's actual label; only when no
+# label was recorded does this fall back to a generic, still-readable phrase
+# derived from the id's kind prefix, never the raw id itself.
+_KIND_FALLBACKS = {
+    "button": "the action button",
+    "input": "the input field",
+    "link": "a navigation link",
+}
+
+
+def _humanize_id(raw_id, fallback="the relevant control"):
+    if not raw_id:
+        return fallback
+    prefix = str(raw_id).split("_")[0].lower()
+    return _KIND_FALLBACKS.get(prefix, fallback)
+
+
+def _label(event, fallback="the relevant control"):
+    """Human-readable identifier for the element an event acted on."""
+    text = event.get("element_text")
+    if text:
+        return text
+    return _humanize_id(event.get("element_id"), fallback)
 
 def detect_friction(events, summary):
     points, raw = [], 0
@@ -12,17 +44,23 @@ def detect_friction(events, summary):
         raw += WEIGHTS[signal]
         points.append({"signal": signal, "title": title, "severity": severity,
                        "evidence": evidence, "affected_action": affected,
-                       "confidence": 0.85 if signal in ("repeated_action", "error", "backtrack") else 0.7,
+                       "confidence": 0.85 if signal in ("repeated_action", "error", "backtrack",
+                                                        "incorrect_click") else 0.7,
                        "recommendation": rec})
 
     actions = [e for e in events if e["event_type"] in ("CLICK", "TYPE", "SCROLL")]
+    click_events_by_id = {}
+    for e in actions:
+        if e["event_type"] == "CLICK" and e.get("element_id") and e["element_id"] not in click_events_by_id:
+            click_events_by_id[e["element_id"]] = e
     clicks = Counter(e["element_id"] for e in actions
                      if e["event_type"] == "CLICK" and e["element_id"])
     for eid, n in clicks.items():
         if n >= 3:
-            add("repeated_action", f"Repeated clicks on {eid}", "HIGH" if n >= 4 else "MEDIUM",
+            label = _label(click_events_by_id[eid])
+            add("repeated_action", f"Repeated clicks on {label}", "HIGH" if n >= 4 else "MEDIUM",
                 f"{n} clicks on the same control — expected response likely did not occur.",
-                eid, "Verify the control's affordance and give visible interaction feedback.")
+                label, "Verify the control's affordance and give visible interaction feedback.")
 
     seen = []
     for e in events:
@@ -39,7 +77,8 @@ def detect_friction(events, summary):
                 and e["event_type"] not in ("WAIT", "PAGE_VIEW"):
             add("hesitation", "Long hesitation before action", "MEDIUM",
                 f"{(e['ts_ms'] - prev['ts_ms']) / 1000:.1f}s pause before "
-                f"{e['event_type'].lower()}.", e.get("element_id") or e["url"],
+                f"{e['event_type'].lower()}.",
+                _label(e, fallback=e["url"]),
                 "Likely decision uncertainty — clarify options at this step.")
         prev = e
 
@@ -47,7 +86,27 @@ def detect_friction(events, summary):
     if errs:
         add("error", f"{len(errs)} interaction error(s)", "HIGH",
             "; ".join((e.get("error") or "unknown") for e in errs[:3]),
-            errs[0].get("element_id") or "", "Ensure interaction targets are stable and visible.")
+            _label(errs[0], fallback=""), "Ensure interaction targets are stable and visible.")
+
+    # Evidence-based: clicks the agent itself made with low confidence are
+    # genuinely shaky attempts, not just steps that happened before the last
+    # one — a multi-step flow (open filter, pick bracket, open checkout,
+    # confirm) is not "incorrect" just because only its final click is last.
+    low_conf_clicks = [
+        e for e in events
+        if e["event_type"] == "CLICK" and e.get("confidence") is not None
+        and e["confidence"] < LOW_CONFIDENCE
+    ]
+    if low_conf_clicks:
+        labels = [_label(e) for e in low_conf_clicks]
+        add("incorrect_click",
+            f"{len(low_conf_clicks)} low-confidence interaction(s)",
+            "HIGH" if len(low_conf_clicks) >= 2 else "MEDIUM",
+            f"Interacted with {', '.join(repr(l) for l in labels)} with low confidence "
+            f"(the agent's own uncertainty at decision time) before proceeding.",
+            labels[0],
+            "Make the correct control easier to distinguish from similar-looking alternatives "
+            "nearby.")
 
     if sum(1 for e in actions if e["event_type"] == "TYPE") >= 2:
         add("repeated_search", "Multiple search attempts", "MEDIUM",

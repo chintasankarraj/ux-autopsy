@@ -4,7 +4,7 @@ import threading
 import time
 
 from backend.app.db import get_db, new_id, now_iso
-from backend.app.schemas import PERSONAS
+from backend.app.schemas import PERSONAS, PERSONA_NAMES
 from backend.app.agents.agent import run_agent
 from backend.app.analysis.autopsy import run_autopsy
 from backend.app.config import settings
@@ -81,15 +81,16 @@ def _run(sid, url, task, persona, custom):
     events = []
     start = time.time()
     persona_desc = (custom or "").strip() or PERSONAS.get(persona, persona)
+    persona_display = PERSONA_NAMES.get(persona, persona)
 
     def on_event(ev):
         ev["ts_ms"] = int((time.time() - start) * 1000)
         db.execute(
             """INSERT INTO events (session_id,ts_ms,event_type,url,element_id,
-              element_text,action,reason,screenshot_path,duration_ms,success,error)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+              element_text,action,reason,confidence,screenshot_path,duration_ms,success,error)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (sid, ev["ts_ms"], ev["event_type"], ev.get("url"), ev.get("element_id"),
-             ev.get("element_text"), ev.get("action"), ev.get("reason"),
+             ev.get("element_text"), ev.get("action"), ev.get("reason"), ev.get("confidence"),
              ev.get("screenshot_path"), ev.get("duration_ms"),
              ev.get("success", 1), ev.get("error")),
         )
@@ -100,7 +101,10 @@ def _run(sid, url, task, persona, custom):
 
     try:
         provider_name = settings.resolved_provider
-        summary = run_agent(sid, url, task, persona_desc, provider_name, on_event)
+        summary = run_agent(sid, url, task, persona_desc, provider_name, on_event, persona_id=persona)
+        summary["persona_id"] = persona
+        summary["persona_display"] = persona_display
+        summary["task"] = task
 
         if summary.get("error"):
             db.execute(
@@ -117,9 +121,10 @@ def _run(sid, url, task, persona, custom):
         for f in autopsy["friction_points"]:
             db.execute(
                 """INSERT INTO friction_points (session_id,title,severity,evidence,
-                  affected_action,confidence,recommendation,signal) VALUES (?,?,?,?,?,?,?,?)""",
+                  affected_action,confidence,recommendation,signal,why_json) VALUES (?,?,?,?,?,?,?,?,?)""",
                 (sid, f["title"], f["severity"], f["evidence"], f["affected_action"],
-                 f["confidence"], f["recommendation"], f["signal"]),
+                 f["confidence"], f["recommendation"], f["signal"],
+                 json.dumps(f["why"]) if f.get("why") else None),
             )
 
         score = autopsy["score"]

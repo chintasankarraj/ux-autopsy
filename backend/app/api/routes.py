@@ -68,8 +68,12 @@ def get_events(sid):
 @router.get("/sessions/{sid}/analysis")
 def get_analysis(sid):
     _session(sid)
-    fps = [row_to_dict(r) for r in get_db().execute(
+    fps = [dict(r) for r in get_db().execute(
         "SELECT * FROM friction_points WHERE session_id=?", (sid,)).fetchall()]
+    for fp in fps:
+        if fp.get("why_json"):
+            fp["why"] = json.loads(fp["why_json"])
+        del fp["why_json"]
     a = get_db().execute("SELECT * FROM analyses WHERE session_id=?", (sid,)).fetchone()
     analysis = row_to_dict(a)
     if analysis and analysis.get("root_causes"):

@@ -1,5 +1,5 @@
 import os, time
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, ViewportSize
 from backend.app.config import settings
 from backend.app.browser.observer import observe, SELECTORS
 from backend.app.browser.executor import execute
@@ -24,15 +24,21 @@ def build_map(page):
                 mapping[f"{prefix}_{len([k for k in mapping if k.startswith(prefix)]) + 1:02d}"] = el
     return mapping
 
-def run_agent(session_id, url, task, persona_desc, provider_name, on_event):
+def run_agent(session_id, url, task, persona_desc, provider_name, on_event, persona_id="custom"):
     provider = get_provider(provider_name)
     summary = {"actions_count": 0, "pages_visited": 0, "completed": False,
                "duration_ms": 0, "error": None, "abandoned": False, "abandon_reason": ""}
     history = []
     os.makedirs("screenshots", exist_ok=True)
+    # Mobile User gets a real narrow viewport, not just a label — the demo
+    # site's responsive layout genuinely renders (and hides) different
+    # controls at this width, so any resulting friction is structural.
+    viewport: ViewportSize = (
+        {"width": 390, "height": 844} if persona_id == "mobile_user" else {"width": 1280, "height": 800}
+    )
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=settings.headless)
-        page = browser.new_page(viewport={"width": 1280, "height": 800})
+        page = browser.new_page(viewport=viewport)
         navs, start = 0, time.time()
         t0 = time.time()
 
@@ -65,7 +71,7 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event):
                 break
             obs = observe(page)
             emap = build_map(page)
-            action = provider.decide(obs, task, persona_desc, history, emap)
+            action = provider.decide(obs, task, persona_desc, history, emap, persona_id=persona_id)
             if (
                 not isinstance(action, dict)
                 or action.get("action") not in ALLOWED_ACTIONS
@@ -75,6 +81,8 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event):
                           "confidence": 0.0}
 
             pre_url = page.url
+            element_text = next((e["text"] for e in obs.get("elements", [])
+                                  if e["id"] == action.get("target")), None)
             result = execute(page, action, emap, settings)
             summary["duration_ms"] = int((time.time() - t0) * 1000)
             act = action["action"]
@@ -82,9 +90,9 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event):
 
             on_event({"event_type": event_type, "url": pre_url,
                       "element_id": action.get("target"),
-                      "element_text": next((e["text"] for e in obs.get("elements", [])
-                                            if e["id"] == action.get("target")), None),
+                      "element_text": element_text,
                       "action": act, "reason": action.get("reason", ""),
+                      "confidence": action.get("confidence"),
                       "screenshot_path": shot(f"s{step}"),
                       "duration_ms": int((time.time() - t0) * 1000),
                       "success": int(result["success"]), "error": result.get("error")})
@@ -95,7 +103,11 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event):
                 history.append({"action": "wait"})
                 continue
 
-            history.append({"action": act, "target": action.get("target")})
+            # `text` carries the element's label, not just its (ephemeral,
+            # DOM-order-based) id — the id can refer to a different element
+            # next observation, so persona logic that needs to know "have I
+            # already clicked the thing labeled X" checks this instead.
+            history.append({"action": act, "target": action.get("target"), "text": element_text})
             summary["actions_count"] += 1
 
             if page.url != pre_url:

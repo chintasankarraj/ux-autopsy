@@ -4,15 +4,15 @@ import { api } from "../services/api";
 import RunningTest from "../components/RunningTest";
 
 const PERSONAS: [string, string, string][] = [
-  ["budget_shopper", "Budget Shopper", "Price-conscious; checks price early; low-medium patience."],
-  ["impatient", "Impatient User", "Very low patience; abandons quickly when confused."],
-  ["beginner", "Confused Beginner", "Low technical knowledge; needs clear labels."],
-  ["power_user", "Power User", "High expertise; goes straight to filters."],
-  ["mobile_user", "Mobile User", "Small-screen assumptions; tap-friendly expectations."],
+  ["budget_shopper", "Budget Shopper", "Price-conscious; searches, then filters by budget before buying."],
+  ["impatient", "Impatient User", "Low patience; clicks the first prominent control without reading."],
+  ["beginner", "Confused Beginner", "Tries 'Add to Cart' before 'Buy Now'; pauses before retrying."],
+  ["power_user", "Power User", "Skips search; goes straight to category and price filters."],
+  ["mobile_user", "Mobile User", "Narrow viewport; controls collapse behind a mobile menu."],
   ["custom", "Custom Persona", "Describe your own synthetic user."],
 ];
 const DEMO_URL = "http://localhost:8000/api/demo-site/";
-const DEMO_TASK = "Find a laptop under ₹60,000 and add it to the cart.";
+const DEMO_TASK = "Find a laptop under ₹60,000 and complete the purchase.";
 
 export default function NewTest() {
   const [sp] = useSearchParams();
@@ -68,7 +68,7 @@ export default function NewTest() {
       <label className="block text-sm font-medium mb-1" htmlFor="task">Task description</label>
       <textarea id="task" value={task} onChange={(e) => setTask(e.target.value)} rows={3}
         className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-4 focus:ring-2 focus:ring-slate-900 outline-none"
-        placeholder="e.g. Find a laptop under ₹60,000 and add it to the cart." />
+        placeholder="e.g. Find a laptop under ₹60,000 and complete the purchase." />
       <fieldset className="mb-4">
         <legend className="text-sm font-medium mb-2">Persona</legend>
         <div className="grid sm:grid-cols-2 gap-2">

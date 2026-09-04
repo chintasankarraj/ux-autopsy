@@ -2,10 +2,11 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 from backend.app.main import app
+from backend.app.config import settings
 
 client = TestClient(app)
-DEMO = "http://localhost:8000/api/demo-site/"
-TASK = "Find a laptop under ₹60,000 and add it to the cart."
+DEMO = settings.demo_url
+TASK = "Find a laptop under ₹60,000 and complete the purchase."
 
 @pytest.fixture(scope="module")
 def session_id():

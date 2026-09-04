@@ -3,10 +3,31 @@ from backend.app.analysis.scoring import compute_score
 from backend.app.providers.base import get_provider
 from backend.app.config import settings
 
+
 def run_autopsy(events, summary):
     fps, _ = detect_friction(events, summary)
     score = compute_score(summary, fps, events)
     provider = get_provider(settings.resolved_provider)
-    s = {k: summary.get(k) for k in ("completed", "actions_count", "pages_visited", "duration_ms")}
+    s = {k: summary.get(k) for k in (
+        "completed", "actions_count", "pages_visited", "duration_ms",
+        "persona_id", "persona_display", "task",
+    )}
     ai = provider.autopsy(s, fps, score)
+
+    # Attach each root-cause's explanation directly onto its friction point
+    # (they're generated in the same order, one per friction item) so the UI
+    # can show a "Why did this happen?" panel per friction point without
+    # cross-referencing two separate arrays. Skipped if a provider returns a
+    # different count than expected — never guess at a mismatched pairing.
+    root_causes = ai.get("root_causes", [])
+    if len(root_causes) == len(fps):
+        for fp, rc in zip(fps, root_causes):
+            fp["why"] = {
+                "observed": rc.get("observed"),
+                "possible_cause": rc.get("possible_cause"),
+                "likely_root_cause": rc.get("likely_root_cause"),
+                "recommendation": rc.get("recommendation"),
+                "confidence": rc.get("confidence"),
+            }
+
     return {"friction_points": fps, "score": score, "ai": ai, "provider": provider.name}

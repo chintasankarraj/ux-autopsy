@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS events (
     element_text TEXT,
     action TEXT,
     reason TEXT,
+    confidence REAL,
     screenshot_path TEXT,
     duration_ms INTEGER,
     success INTEGER NOT NULL DEFAULT 1,
@@ -63,7 +64,8 @@ CREATE TABLE IF NOT EXISTS friction_points (
     affected_action TEXT,
     confidence REAL,
     recommendation TEXT,
-    signal TEXT
+    signal TEXT,
+    why_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS analyses (
@@ -143,10 +145,22 @@ def get_db() -> _SafeConnection:
     return _wrapped
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl_type: str) -> None:
+    """CREATE TABLE IF NOT EXISTS only handles brand-new databases — a
+    pre-existing local demo database from before a column existed needs it
+    added explicitly, or later inserts referencing it fail."""
+    cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
+
+
 def init_db() -> None:
     with _lock:
-        _connect().executescript(SCHEMA)
-        _connect().commit()
+        conn = _connect()
+        conn.executescript(SCHEMA)
+        _ensure_column(conn, "friction_points", "why_json", "TEXT")
+        _ensure_column(conn, "events", "confidence", "REAL")
+        conn.commit()
 
 
 def row_to_dict(row) -> dict | None:

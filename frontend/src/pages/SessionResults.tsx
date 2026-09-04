@@ -114,6 +114,9 @@ export default function SessionResults() {
                   <p><strong className="text-slate-500">Possible cause:</strong> {rc.possible_cause}</p>
                   <p><strong className="text-slate-500">Likely root cause:</strong> {rc.likely_root_cause}</p>
                   <p className="text-teal-700"><strong>Recommendation:</strong> {rc.recommendation}</p>
+                  {rc.confidence != null && (
+                    <p className="text-xs text-slate-400">Confidence: {(rc.confidence * 100).toFixed(0)}%</p>
+                  )}
                 </div>
               ))}
             </div>
@@ -136,7 +139,7 @@ export default function SessionResults() {
 
       <section className="mt-8">
         <h2 className="font-semibold mb-3">Action Timeline</h2>
-        <Timeline events={events} sevColor={sevColor} />
+        <Timeline events={events} sevColor={sevColor} frictionPoints={fps} />
       </section>
     </div>
   );

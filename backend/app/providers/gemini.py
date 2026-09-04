@@ -3,7 +3,7 @@ from backend.app.providers.base import LLMProvider
 from backend.app.config import settings
 
 DECIDE_PROMPT = """You are a synthetic user on a website. TASK: {task}
-PERSONA: {persona}
+PERSONA ({persona_id}): {persona}
 OBSERVATION: {obs}
 RECENT ACTIONS: {hist}
 Respond ONLY with JSON, choosing target from available element IDs:
@@ -17,8 +17,12 @@ Summary: {summary}
 Deterministic friction evidence (do NOT invent new events): {friction}
 Scores: {score}
 Return ONLY JSON: {{"executive_summary":"3-5 sentences",
-"root_causes":[{{"observed":"","possible_cause":"","likely_root_cause":"","recommendation":""}}]}}
-Use hedged language. Distinguish observation from inference."""
+"root_causes":[{{"observed":"","possible_cause":"","likely_root_cause":"",
+"recommendation":"","confidence":0.0-1.0}}]}}
+Include one root_causes entry per friction evidence item, in the same order.
+The numeric scores above are final and must not be changed or restated
+differently. Use hedged language ("likely", "possible", "evidence suggests").
+Distinguish observation from inference."""
 
 def _parse(text):
     m = re.search(r"\{.*\}", text, re.DOTALL)
@@ -40,8 +44,8 @@ class GeminiProvider(LLMProvider):
         configure(api_key=settings.gemini_api_key)
         self.model = GenerativeModel(settings.gemini_model)
 
-    def decide(self, obs, task, persona, history, element_map):
-        prompt = DECIDE_PROMPT.format(task=task, persona=persona,
+    def decide(self, obs, task, persona, history, element_map, persona_id=None):
+        prompt = DECIDE_PROMPT.format(task=task, persona=persona, persona_id=persona_id or "custom",
             obs=json.dumps(obs)[:6000], hist=json.dumps(history[-8:]))
         for _ in range(2):
             try:

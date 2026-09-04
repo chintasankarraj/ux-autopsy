@@ -45,8 +45,10 @@ Website URL + Task + Persona
 
 ## Features
 
-- **Synthetic personas** — Budget Shopper, Impatient User, Confused
-  Beginner, Power User, Mobile User, or a free-text custom persona.
+- **Persona-differentiated behavior, not just labels** — Budget Shopper,
+  Impatient User, Confused Beginner, Power User, and Mobile User each take a
+  genuinely different path through the same page (see below), or describe a
+  free-text custom persona.
 - **Real browser automation** — Playwright drives an actual Chromium
   instance; no simulated DOM.
 - **Structured, whitelisted actions** — the agent can only click/type/scroll/
@@ -54,12 +56,21 @@ Website URL + Task + Persona
   execute arbitrary code or invent selectors.
 - **Deterministic UX scoring** — a fixed formula (completion, efficiency,
   navigation, recovery, friction), never altered by an LLM.
-- **Deterministic friction detection** — repeated clicks, backtracking,
-  hesitation, interaction errors, dead ends, abandonment, excessive actions,
-  and explicit task failure.
+- **Evidence-based friction detection** — repeated clicks, low-confidence
+  ("incorrect") clicks, backtracking, real hesitation, interaction errors,
+  dead ends, abandonment, excessive actions, and explicit task failure. Every
+  friction point carries its evidence as bullet-point facts, not a bare
+  label.
 - **Root-cause "autopsy"** — separates *observed behavior* from *possible
-  cause* from *likely root cause* from *recommendation*, using hedged
-  language ("likely", "evidence suggests") for anything inferred.
+  cause* from *likely root cause* from *recommendation* from *confidence*,
+  using hedged language ("likely", "evidence suggests") for anything
+  inferred.
+- **"Why did this happen?"** — an expandable panel per friction point,
+  generated from that point's own recorded evidence (not a fresh guess).
+- **Screenshot evidence in the timeline** — each step is screenshotted, and
+  expanding a timeline event shows its timestamp, URL, element, reasoning,
+  any related friction, and the screenshot itself (with a graceful fallback
+  if one is missing).
 - **Demo mode, no API key required** — a deterministic heuristic provider
   drives the whole pipeline end-to-end against a bundled demo store.
 - **Session comparison** — pick up to three completed sessions and compare
@@ -157,6 +168,14 @@ the heuristic narrative generator) only ever writes the qualitative summary
 and root-cause text, and even then is instructed to hedge inference
 ("likely cause", "evidence suggests") rather than assert it as fact.
 
+The `confidence` value each provider reports per action has a second job
+beyond narrative color: `analysis/friction.py` treats a genuinely
+low-confidence click (the provider's own uncertainty at decision time) as
+evidence of an "incorrect click" — this is why a necessary multi-step flow
+(open a filter, pick a bracket, open checkout, confirm) is never flagged as
+friction just because only its last click is literally last, while a real
+wrong turn (confidence well below the rest of the session) is.
+
 ## Browser automation
 
 `agents/agent.py` runs the loop: observe the page → ask the provider for one
@@ -185,11 +204,36 @@ number:
 With no `GEMINI_API_KEY` set, `LLM_PROVIDER=auto` resolves to the mock
 provider automatically — the app is fully usable out of the box. The
 built-in demo target (`GET /api/demo-site/`) is a small, self-contained
-electronics store ("PixelMart") with an intentionally low-contrast filter
-control and a search-driven checkout flow, purpose-built so the deterministic
-heuristic can reliably complete a real task ("find a laptop under ₹60,000
-and add it to the cart") end to end. `GET /api/health` reports
-`"demo_mode": true` whenever this fallback is active.
+electronics store ("PixelMart") purpose-built for the demo task ("find a
+laptop under ₹60,000 and complete the purchase"), with **deliberate,
+realistic UX friction points** rather than a scripted happy path:
+
+- "Add to Cart" and "Buy Now" sit side by side — a plausible wrong first
+  click for a persona that doesn't read carefully.
+- The price filter is a low-contrast text toggle grouped tightly next to the
+  sort pills, easy to overlook.
+- At a narrow (mobile) viewport, the filter/sort controls collapse behind a
+  "☰ Menu" button — a real, structural source of mobile-only friction.
+
+None of this is randomized — the same persona against the same page takes
+the same path every time, but which controls it tries (and whether it makes
+a wrong first attempt) genuinely differs by persona, not just by narration.
+`GET /api/health` reports `"demo_mode": true` whenever the mock fallback is
+active.
+
+### How personas actually differ
+
+| Persona | Behavior | Typical evidence |
+|---|---|---|
+| Budget Shopper | Searches, then opens the filter panel and narrows by price before buying | A few extra actions vs. the minimal path; no friction if the filter is found cleanly |
+| Power User | Skips search entirely — goes straight to category + price filters | The shortest, most direct action count |
+| Confused Beginner | Clicks "Add to Cart" before finding "Buy Now"; pauses ~7s before retrying | `incorrect_click` (a real low-confidence click) + `hesitation` (a real timed pause) |
+| Impatient User | Clicks the first prominent control (a sort pill) before reading anything | `incorrect_click` from a genuinely wasted first action |
+| Mobile User | Runs at a 390×844 viewport; the filter is hidden behind a mobile menu | An extra "open menu" action that desktop personas never need |
+
+Every one of these differences shows up as real Playwright actions and real
+event timestamps — friction detection and scoring run on that data exactly
+like they would for a real website, never on hand-authored session data.
 
 ## Installation
 
@@ -244,6 +288,9 @@ Open http://localhost:5173, click **View Demo** on the dashboard, then
 cd backend
 pytest -v
 
+# Backend type-check (optional; pip install pyright first)
+pyright
+
 # Frontend type-check
 cd frontend
 npx tsc -b
@@ -256,11 +303,14 @@ npx playwright test
 
 ## Limitations
 
-- The mock provider's decisions are keyword-matching heuristics, not real
-  reasoning — persona differences mostly show up in the Gemini path, not the
-  deterministic demo path.
-- Screenshots are captured to `backend/screenshots/` for debugging but are
-  not currently surfaced in the timeline UI.
+- The mock provider's decisions are still keyword/DOM-structure heuristics,
+  not real reasoning — they're tuned specifically against the bundled demo
+  site's markup, so pointing demo-mode personas at an arbitrary real website
+  won't reproduce this same nuanced behavior (the Gemini path handles
+  arbitrary sites; the mock path is a demo, not a general-purpose agent).
+- The `incorrect_click` friction signal relies on the acting provider
+  reporting an honest confidence value per action; a provider that always
+  reports high confidence will under-report this signal.
 - SQLite with a single writer lock is fine for local/demo use, not for
   concurrent production traffic.
 - No authentication — this is a local developer/demo tool, not intended to
@@ -270,7 +320,7 @@ npx playwright test
 
 ## Future improvements
 
-- Surface per-event screenshots in the timeline for visual review.
-- Persona-aware heuristics for the mock provider (not just the LLM path).
+- Persona-aware heuristics for arbitrary (non-demo) websites in the mock
+  path, not just the bundled demo site.
 - Multi-page task support with richer navigation-graph friction analysis.
 - Postgres option for multi-user / production deployments.

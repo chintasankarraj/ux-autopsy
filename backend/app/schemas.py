@@ -26,6 +26,17 @@ PERSONAS: dict[str, str] = {
     ),
 }
 
+# Display names only (narrative text) — the persona/friction/scoring pipeline
+# itself keys everything off the ids above.
+PERSONA_NAMES: dict[str, str] = {
+    "budget_shopper": "Budget Shopper",
+    "impatient": "Impatient User",
+    "beginner": "Confused Beginner",
+    "power_user": "Power User",
+    "mobile_user": "Mobile User",
+    "custom": "Custom Persona",
+}
+
 
 class SessionCreate(BaseModel):
     url: str
