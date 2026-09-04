@@ -363,6 +363,30 @@ It refuses to run without `UX_AUTOPSY_ALLOW_LIVE_GEMINI=1`, and refuses if
 the backend it finds isn't actually resolving to the `gemini` provider. Run
 it deliberately and sparingly — the free tier has a low daily request quota.
 
+**Custom task text containing `$` (e.g. a price) — never double-quote it.**
+A real run once passed `--task "Find a laptop priced below $800..."` in bash
+double quotes; bash expanded `$800` into positional parameter `$8` (empty)
+followed by `00`, silently sending the wrong task to Gemini. Two safe
+alternatives, in order of robustness:
+
+```bash
+# Safest — immune to shell quoting in any shell (bash/PowerShell/cmd.exe):
+echo -n 'Find a laptop priced below $800 and add it to the cart.' > /tmp/task.txt
+UX_AUTOPSY_ALLOW_LIVE_GEMINI=1 backend/.venv/Scripts/python.exe \
+    backend/scripts/live_gemini_regression.py --task-file /tmp/task.txt
+
+# Also safe — single quotes never expand variables:
+UX_AUTOPSY_ALLOW_LIVE_GEMINI=1 backend/.venv/Scripts/python.exe \
+    backend/scripts/live_gemini_regression.py \
+    --task 'Find a laptop priced below $800 and add it to the cart.'
+```
+
+The script also prints the resolved task text (`Task: '...'`) before creating
+the session, and its per-event report line now includes `decide_ms` (Gemini
+API latency) and `observe_ms` (time spent reading the page's current state
+via Playwright) so a large unexplained gap between events can be attributed
+— or shown to be unattributed by either — without guessing.
+
 ## Limitations
 
 - The mock provider's decisions are still keyword/DOM-structure heuristics,

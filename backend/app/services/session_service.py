@@ -88,12 +88,12 @@ def _run(sid, url, task, persona, custom):
         db.execute(
             """INSERT INTO events (session_id,ts_ms,event_type,url,element_id,
               element_text,action,reason,confidence,screenshot_path,duration_ms,decide_ms,
-              success,error)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              observe_ms,success,error)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (sid, ev["ts_ms"], ev["event_type"], ev.get("url"), ev.get("element_id"),
              ev.get("element_text"), ev.get("action"), ev.get("reason"), ev.get("confidence"),
              ev.get("screenshot_path"), ev.get("duration_ms"), ev.get("decide_ms"),
-             ev.get("success", 1), ev.get("error")),
+             ev.get("observe_ms"), ev.get("success", 1), ev.get("error")),
         )
         db.commit()
         events.append(ev)

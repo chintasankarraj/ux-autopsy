@@ -71,8 +71,10 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event, pers
                 on_event({"event_type": "ABANDONMENT", "url": page.url,
                           "element_text": summary["abandon_reason"]})
                 break
+            observe_start = time.time()
             obs = observe(page)
             emap = build_map(page)
+            observe_ms = int((time.time() - observe_start) * 1000)
             hint = completion_evidence(task, history, obs)
             decide_start = time.time()
             action = provider.decide(obs, task, persona_desc, history, emap, persona_id=persona_id,
@@ -106,6 +108,7 @@ def run_agent(session_id, url, task, persona_desc, provider_name, on_event, pers
                       "screenshot_path": shot(f"s{step}"),
                       "duration_ms": int((time.time() - t0) * 1000),
                       "decide_ms": decide_ms,
+                      "observe_ms": observe_ms,
                       "success": int(result["success"]), "error": result.get("error")})
 
             if not result["success"] and act not in ("finish", "fail"):

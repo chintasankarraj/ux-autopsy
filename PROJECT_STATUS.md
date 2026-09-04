@@ -6,12 +6,72 @@ Last updated: 2026-09-04
 
 UX Autopsy is now a working, end-to-end product with a genuinely
 evidence-driven demo (v1.1), more reliable real-world Gemini execution and
-trustworthy evidence (v1.2), and, as of v1.3, automated tests fully isolated
-from the real Gemini API so routine development can never burn live quota —
-see "v1.3: test isolation from live Gemini" below. Every item on the
-Phase 20 acceptance checklist (see below) passes locally. This document
-records what was inherited, what was broken, what was fixed, and what
-remains a known limitation.
+trustworthy evidence (v1.2), automated tests fully isolated from the real
+Gemini API (v1.3), and, as of v1.3.1, a hardened live-regression harness that
+can't silently corrupt its own task text — see "v1.3.1: harden live
+regression task invocation" below. Every item on the Phase 20 acceptance
+checklist (see below) passes locally. This document records what was
+inherited, what was broken, what was fixed, and what remains a known
+limitation.
+
+## v1.3.1: harden live regression task invocation (2026-09-04)
+
+**Root cause:** a live regression run passed `--task "Find a laptop priced
+below $800 and add it to the cart."` inside bash double quotes. Bash expands
+`"$800"` as positional parameter `$8` (empty) followed by literal `00`
+*before* Python ever sees the argument — silently sending "...below 00..."
+to Gemini. This is a shell-invocation hazard, not a defect in the script's
+own argument parsing (which never touched or mangled the string it received).
+Separately, the same run's ~182-second gap between the "Laptops" click and
+the agent's next decision was, until now, unattributed: `decide_ms`
+(Gemini latency) accounted for only ~7s of it, and nothing measured how long
+`observe(page)`/`build_map(page)` (reading the live page's current state)
+took.
+
+**Changes (regression harness + one small, additive instrumentation only —
+no agent behavior, prompts, completion logic, parser, friction detection,
+scoring, provider implementation, or frontend touched):**
+
+- `backend/scripts/live_gemini_regression.py` — added `--task-file PATH`
+  (reads the task verbatim from a file; immune to shell quoting in any
+  shell) alongside the existing `--task`; extracted `build_parser()` and
+  `resolve_task()` as pure, network-free functions so they're independently
+  testable; the resolved task is now printed (`Task: '...'`) before the
+  session is created; the per-event report line now shows `decide_ms` and
+  `observe_ms` so a gap can be attributed (or shown to be unattributed)
+  without manual timestamp arithmetic. `backend/scripts/__init__.py` added
+  so the script is importable as `backend.scripts.live_gemini_regression`
+  from a test.
+- `backend/app/agents/agent.py` — added a single wall-clock timer around
+  the existing `observe(page)` + `build_map(page)` calls (unchanged
+  themselves), recorded as `observe_ms` on the same event that already
+  carries `decide_ms`. Purely additive measurement; not wired into
+  friction/scoring (per instruction not to touch those).
+- `backend/app/db.py` / `backend/app/services/session_service.py` — added
+  `events.observe_ms` column (with an `_ensure_column` migration for
+  existing local databases) and persist it.
+- `backend/tests/test_live_regression_harness.py` (new) — proves the exact
+  string `"Find a laptop priced below $800 and add it to the cart."`
+  survives `build_parser()`/`resolve_task()` unchanged via both `--task` and
+  `--task-file`, and that the built-in default is correct — all without any
+  network call (tests stop before `main()`'s HTTP-calling code).
+- README.md — documented the safe invocation (`--task-file`, or single
+  quotes) and the new timing fields.
+
+**Timing investigation — where the ~182s went:** not determined further
+than "somewhere inside `observe()`/`build_map()`, not `decide()` (Gemini)
+and not `execute()` (the click itself, which had already completed and been
+recorded before the gap began)." The new `observe_ms` instrumentation will
+show this precisely on the *next* live run, but this task deliberately made
+no live Gemini call, so it hasn't been observed with the new field yet.
+`MAX_SESSION_SECONDS` was deliberately **not** changed — the goal here was
+attribution, not tuning a timeout around one unexplained sample.
+
+**Verified — zero live Gemini calls made:** `pytest backend/tests/ -v` —
+**60/60 passed in ~4.6s**; `pyright` — 0/0/0; `npx tsc -b --force` — clean;
+`npx playwright test` — **2/2 passed in ~10.7s**, servers auto-started and
+torn down by Playwright's own `webServer` config (unchanged from v1.3).
+`.env`/`.env.example` untouched; no secrets in any new/changed file.
 
 ## v1.3: test isolation from live Gemini (2026-09-04)
 

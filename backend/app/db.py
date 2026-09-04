@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS events (
     screenshot_path TEXT,
     duration_ms INTEGER,
     decide_ms INTEGER,
+    observe_ms INTEGER,
     success INTEGER NOT NULL DEFAULT 1,
     error TEXT
 );
@@ -164,6 +165,7 @@ def init_db() -> None:
         _ensure_column(conn, "friction_points", "why_json", "TEXT")
         _ensure_column(conn, "events", "confidence", "REAL")
         _ensure_column(conn, "events", "decide_ms", "INTEGER")
+        _ensure_column(conn, "events", "observe_ms", "INTEGER")
         _ensure_column(conn, "analyses", "fallback", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "analyses", "fallback_reason", "TEXT")
         conn.commit()
