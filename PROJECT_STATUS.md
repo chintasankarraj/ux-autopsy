@@ -1,18 +1,132 @@
 # PROJECT_STATUS
 
-Last updated: 2026-09-04
+Last updated: 2026-09-05
+
+## Status at a glance
+
+- **Version:** v1.4
+- **Code status:** implemented, tested, committed, pushed
+- **Current commit:** `7b6055f` — "feat: strengthen completion evidence" (branch `master`, `origin/master` synchronized)
+- **Test status:** 72/72 pytest passed · pyright clean (0/0/0) · frontend TypeScript clean · Playwright E2E 2/2 passed
+- **Live Gemini status:** inconclusive — the free-tier daily quota (`generate_content_free_tier_requests`, limit 20/day/project/model) returned `429 ResourceExhausted` on every decision across three separate live-regression attempts (2026-09-05), before genuine model decisions could be produced. **This is a stated external-quota limitation, not an application failure or code defect** — the safe-fallback contract itself was exercised correctly each time (session completed cleanly via `ABANDONMENT`, no crash, no false completion).
+
+**Validated vs. pending, explicitly:**
+
+| | Validated |
+|---|---|
+| Mock/Demo Mode pipeline (agent loop, friction, scoring, autopsy, UI) | ✅ locally tested + live-verified via Playwright E2E |
+| v1.3.2 observation-stall fix | ✅ tested locally **and** live-validated (real Gemini runs since the fix complete in <90s, no stall recurrence) |
+| v1.4 dialog capture / completion evidence — local fixtures (Mock provider, no live site) | ✅ tested locally (`test_dialog_evidence.py`, 8/8 passing) |
+| v1.4 dialog capture / completion evidence — live Gemini + live site, end to end | ⏳ pending — blocked by Gemini free-tier quota exhaustion, not yet observed to succeed live |
 
 ## Summary
 
 UX Autopsy is now a working, end-to-end product with a genuinely
 evidence-driven demo (v1.1), more reliable real-world Gemini execution and
 trustworthy evidence (v1.2), automated tests fully isolated from the real
-Gemini API (v1.3), and, as of v1.3.1, a hardened live-regression harness that
-can't silently corrupt its own task text — see "v1.3.1: harden live
-regression task invocation" below. Every item on the Phase 20 acceptance
+Gemini API (v1.3), a hardened live-regression harness that can't silently
+corrupt its own task text (v1.3.1), a fix for a ~181-second Playwright
+observation stall live-validated against the real API (v1.3.2), and, as of
+v1.4, a stronger, dialog-backed completion-evidence signal — see "v1.4:
+strengthen completion evidence" below for what's tested locally versus what
+remains pending live validation. Every item on the Phase 20 acceptance
 checklist (see below) passes locally. This document records what was
 inherited, what was broken, what was fixed, and what remains a known
 limitation.
+
+## v1.4: strengthen completion evidence (2026-09-04, commit `7b6055f`)
+
+**Problem:** the v1.3.2 live regression showed a model-issued `finish`
+trusted right after a successful "Add to cart" click, backed only by a
+page-text keyword match (the word "cart") that DemoBlaze's nav bar makes
+permanently true regardless of whether anything was actually added. A
+Gemini-free Playwright diagnostic against the real site found a much
+stronger, fully generic signal going unused: a native browser dialog
+("Product added") firing as a direct, synchronous side effect of the click
+itself.
+
+**Changes:**
+
+- `capture_dialogs()` (`backend/app/agents/agent.py`) — a generic Playwright
+  dialog listener that records each dialog's type/message and dismisses it,
+  preserving the exact auto-dismiss behavior Playwright already applies when
+  no listener is registered.
+- `dialog_completion_evidence()` (`backend/app/agents/completion.py`) —
+  relevance-gated evidence derived purely from keyword overlap between a
+  captured dialog's text and the task's own words (via a small,
+  site-agnostic prefix-match helper for simple inflections like
+  add/added) — never a hardcoded phrase for any specific site.
+- The new dialog hint feeds into the exact same `completion_hint` channel
+  `completion_evidence()` already used, so `evaluate_completion()`'s
+  existing two-consecutive-signal safety net applies unchanged, and a
+  model-issued `finish` remains trusted unconditionally, exactly as in v1.2
+  — this only gives the model (and the safety net) better evidence, it does
+  not gate or block completion. `completion_evidence()` and
+  `evaluate_completion()` themselves are untouched.
+- Each captured dialog also becomes its own `DIALOG` timeline event, using
+  only existing `events` table columns, so no schema migration or frontend
+  change was needed (the timeline already renders unknown event types
+  generically, via a fallback icon).
+- 8 new tests (`backend/tests/test_dialog_evidence.py`) cover: real dialog
+  capture without blocking, relevant vs. irrelevant dialog text, no-dialog
+  behavior, the finish-is-trusted-unconditionally boundary at the
+  `execute()` layer, and two full local-fixture sessions (Mock provider, no
+  Gemini, no DemoBlaze) proving the dialog event is DB-schema-compatible end
+  to end.
+
+**Verified locally (2026-09-04):** `pytest backend/tests/ -v` — 72/72
+passed; `pyright` — 0/0/0; `npx tsc -b` — clean; `npx playwright test` —
+2/2 passed. All against local fixtures / the mock provider, per the test
+isolation established in v1.3.
+
+**Live validation status — inconclusive, not yet observed to succeed
+(2026-09-05):** three separate live-regression attempts against
+`https://www.demoblaze.com/` (persona `beginner`, task "Find a laptop
+priced below $800 and add it to the cart.") each returned
+`google.api_core.exceptions.ResourceExhausted: 429` (`quota_id:
+GenerateRequestsPerDayPerProjectPerModel-FreeTier`, `quota_value: 20`) on
+every decision, before the agent ever reached a real click — including one
+attempt after explicit confirmation that the daily quota had reset, and
+one attempt immediately following a single successful minimal API probe
+call (which itself likely consumed the last available request of that
+day's allotment). No `DIALOG` event, no dialog-backed completion evidence,
+and no model-issued `finish` have yet been observed in a live run — this
+remains **untested against a real end-to-end Gemini session**, honestly
+reported as pending rather than assumed to work from the code and local
+tests alone. Each attempt's safe-fallback contract itself held correctly
+(session completed via `ABANDONMENT: Action limit reached`, no crash, no
+false completion, correct friction/UX-score reporting under total, sustained
+API failure) — consistent with the same contract validated under real
+failure conditions in v1.2. Re-run
+`backend/scripts/live_gemini_regression.py --task-file <path>` once quota is
+confirmed available (verified by an actual successful decision in the
+run itself, not merely by elapsed time) to complete this validation.
+
+## v1.3.2: prevent Playwright observation stalls (2026-09-04, commit `f70da2c`)
+
+**Root cause:** `observe()` and `build_map()`
+(`backend/app/browser/observer.py`, `backend/app/agents/agent.py`) enumerate
+Locators via `count()` then `nth(i)` — `count()` takes a DOM snapshot while
+`nth(i)` re-resolves lazily against the live DOM. If the page mutates between
+the two (e.g. right after a navigation, since `run_agent()` calls `observe()`
+with no settle wait), a probe against a now-stale index blocked for
+Playwright's unset default of 30000ms before the existing
+except-`Exception` handling silently swallowed it. Six such probes (3
+selectors × 2 redundant sweeps) matched a measured **~181-second** production
+stall almost exactly.
+
+**Change:** gave `is_disabled()`/`bounding_box()`/`inner_text()`/
+`get_attribute()` an explicit 1500ms timeout
+(`OBSERVE_PROBE_TIMEOUT_MS`, defined once in `observer.py` and shared by
+`agent.py`), so one stale locator now costs at most 1.5s instead of 30s. No
+prompt, provider, completion, friction, scoring, or frontend behavior
+changed. New test file: `backend/tests/test_observe_probe_timeout.py`.
+
+**Live-validated, not just unit-tested:** live Gemini regression runs
+performed after this fix (2026-09-05) completed in well under 90 seconds
+total (25-action sessions finishing in ~69–90s), with no recurrence of the
+~181s gap in any run's `observe_ms`/`decide_ms` timing breakdown — the fix
+holds under real conditions, not only in the dedicated timeout tests.
 
 ## v1.3.1: harden live regression task invocation (2026-09-04)
 
